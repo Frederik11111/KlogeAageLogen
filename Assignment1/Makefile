@@ -1,10 +1,10 @@
-CC=gcc
-CFLAGS=-std=c11 -Wall -Werror -Wextra -pedantic -g
+CC = gcc
+CFLAGS = -std=c11 -Wall -Werror -Wextra -pedantic -g
 
-all: Assignment1
+all: file
 
-Assignment1: Assignment1
-	$(CC) -o Assignment1 Assignment1.c $(CFLAGS)
+file: file.c
+	$(CC) $(CFLAGS) -o file file.c
 
 clean:
-	rm -f Assignment1
+	rm -f file

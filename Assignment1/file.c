@@ -1,28 +1,40 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
+#include <string.h>
 
-int main(int argc, char argv[]) {
-    // Check arguments
+int print_error(char *path, int errnum) {
+    return fprintf(stdout, "%s: cannot determine (%s)\n",
+                   path, strerror(errnum));
+}
+
+int main(int argc, char *argv[]) {
     if (argc != 2) {
-        fprintf(stderr, "Usage: %s <filename>\n", argv[0]); 
+        fprintf(stderr, "Usage: file path\n");
         return EXIT_FAILURE;
     }
 
-    // Get filename from arguments
-    char filename = argv[1];
-
-    // Try to open the file
-
-    FILEfp = fopen(filename, "rb"); // Open in binary mode
+    char *filename = argv[1];
+    FILE *fp = fopen(filename, "rb");
     if (fp == NULL) {
-        printf("%s: No such file or directory\n", filename);
-        return EXIT_FAILURE;
+        print_error(filename, errno);
+        return EXIT_SUCCESS;
     }
 
-    // File opened successfully
-    printf("s: data\n", filename);
+    // Find filens størrelse
+    fseek(fp, 0, SEEK_END);
+    long filesize = ftell(fp);
+    rewind(fp);  // flyt tilbage til start i tilfælde af, vi skal læse senere
 
-    // Close the file and return success
+    if (filesize == 0) {
+        printf("%s: empty\n", filename);
+        fclose(fp);
+        return EXIT_SUCCESS;
+    }
+
+    // Midlertidigt fallback
+    printf("%s: data\n", filename);
+
     fclose(fp);
     return EXIT_SUCCESS;
 }
