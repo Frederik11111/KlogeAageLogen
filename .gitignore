@@ -1,1 +1,40 @@
+# Compiled object files
+*.o
+*.obj
 
+# Compiled dynamic libraries
+*.so
+*.so.*
+*.dylib
+*.dll
+
+# Compiled static libraries
+*.a
+*.lib
+
+# Executables
+*.out
+*.exe
+*.elf
+
+# Default binary from gcc (if -o not specified)
+a.out
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+*.DS_Store
+
+# Coverage and profiling
+*.gcda
+*.gcno
+*.gcov
+*.prof
+*.profraw
+
+# Temporary files
+*.swp
+*.swo
+*~
