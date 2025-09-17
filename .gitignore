@@ -11,6 +11,7 @@
 # Compiled static libraries
 *.a
 *.lib
+*.vscode/
 
 # Executables
 *.out
