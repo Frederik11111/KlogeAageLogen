@@ -3,11 +3,6 @@
 #include <errno.h>
 #include <string.h>
 #include <stdbool.h>
-// Error call
-int printError(char *path, int errnum) {
-    return fprintf(stdout, "%s: cannot determine (%s)\n",
-                   path, strerror(errnum));
-}
 
 // ENUM + char table
 typedef enum {
@@ -50,18 +45,55 @@ bool is_iso8859(FILE *fp) {
     return true;
 }
 
-bool is_UTF8 (FILE *fp) {
-    //to do
+bool is_UTF8(FILE *fp) {
+    int ch, next, i;
+    while ((ch = fgetc(fp)) != EOF) {
+        if ((ch & 0x80) == 0x00) {  // ASCII
+        } else if ((ch & 0xE0) == 0xC0) { // 2 byte
+            next = fgetc(fp);
+            if (next == EOF || (next & 0xC0) != 0x80) {
+                rewind(fp);
+                return false;
+            }
+        } else if ((ch & 0xF0) == 0xE0) { // 3 byte
+            for (i = 0; i < 2; i++) {
+                next = fgetc(fp);
+                if (next == EOF || (next & 0xC0) != 0x80) {
+                    rewind(fp);
+                    return false;
+                }
+            }
+        } else if ((ch & 0xF8) == 0xF0) { // 4 byte
+            for (i = 0; i < 3; i++) {
+                next = fgetc(fp);
+                if (next == EOF || (next & 0xC0) != 0x80) {
+                    rewind(fp);
+                    return false;
+                }
+            }
+        } else {
+            rewind(fp);
+            return false; // invalid start byte
+        }
+    }
+    rewind(fp);
+    return true;
 }
 
+    FileType detectType(FILE *fp, long filesize) {
+        if (filesize == 0) return EMPTY;
+        if (is_ascii(fp)) return ASCII;
+        if (is_iso8859(fp)) return ISO8859_1;
+        if (is_UTF8(fp)) return UTF8;
+        return DATA;
+    }
 
-FileType detectType(FILE *fp, long filesize) {
-    if (filesize == 0) return EMPTY;
-    if (is_ascii(fp) == 0) return ASCII;
-    if (is_iso8859(fp) == 0) return ISO8859_1;
-    if (is_UTF8(fp) == 0) return UTF8;
-    return DATA;
-}
+    // Error call
+    int printError(char *path, int errnum) {
+        return fprintf(stdout, "%s: cannot determine (%s)\n",
+                    path, strerror(errnum));
+    }
+
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -72,7 +104,7 @@ int main(int argc, char *argv[]) {
     char *filename = argv[1];
     FILE *fp = fopen(filename, "rb");
     if (fp == NULL) {
-        print_error(filename, errno);
+        printError(filename, errno);
         return EXIT_SUCCESS;
     }
 
@@ -81,10 +113,10 @@ int main(int argc, char *argv[]) {
     long filesize = ftell(fp);
     rewind(fp);  // flyt tilbage til start i tilfælde af, vi skal læse senere
 
+    // detectType call 
+    FileType type = detectType(fp, filesize);
+    printf("%s: %s\n", filename, FileTypeNames[type]);
 
-
-    // Midlertidigt fallback
-    printf("%s: data\n", filename);
 
     fclose(fp);
     return EXIT_SUCCESS;
