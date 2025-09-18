@@ -24,7 +24,7 @@ const char *FileTypeNames[] = {
 bool is_ascii(FILE *fp) {
     int ch;
     while ((ch = fgetc(fp)) != EOF) {
-        if (ch < 0 || ch > 0x7F) {
+        if (ch == 0 || ch < 0 || ch > 0x7F) {
             rewind(fp);
             return false;
         }
@@ -36,7 +36,7 @@ bool is_ascii(FILE *fp) {
 bool is_iso8859(FILE *fp) {
     int ch;
     while ((ch = fgetc(fp)) != EOF) {
-        if (ch >= 128 && ch <= 159) {
+        if (ch == 0 || (ch >= 128 && ch <= 159)) {
             rewind(fp);
             return false; 
         }
@@ -48,6 +48,10 @@ bool is_iso8859(FILE *fp) {
 bool is_UTF8(FILE *fp) {
     int ch, next, i;
     while ((ch = fgetc(fp)) != EOF) {
+        if (ch == 0) { 
+            rewind(fp);
+            return false;
+        }
         if ((ch & 0x80) == 0x00) {  // ASCII
         } else if ((ch & 0xE0) == 0xC0) { // 2 byte
             next = fgetc(fp);
