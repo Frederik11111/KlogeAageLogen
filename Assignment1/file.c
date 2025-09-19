@@ -15,7 +15,7 @@ typedef enum {
 const char *FileTypeNames[] = {
     "empty",
     "ASCII text",
-    "ISO-8859-1 text",
+    "ISO-8859 text",
     "UTF-8 Unicode text",
     "data"
 };
@@ -35,15 +35,22 @@ bool is_ascii(FILE *fp) {
 
 bool is_iso8859(FILE *fp) {
     int ch;
+    bool found_high = false;
     while ((ch = fgetc(fp)) != EOF) {
         if (ch == 0 || (ch >= 128 && ch <= 159)) {
             rewind(fp);
-            return false; 
+            return false;
+        }
+        if (ch >= 160 && ch <= 255) {
+            found_high = true;
         }
     }
     rewind(fp);
-    return true;
+    return found_high; // kun true hvis der faktisk er ISO-tegn
 }
+
+
+
 
 bool is_UTF8(FILE *fp) {
     int ch, next, i;
@@ -87,14 +94,15 @@ bool is_UTF8(FILE *fp) {
     FileType detectType(FILE *fp, long filesize) {
         if (filesize == 0) return EMPTY;
         if (is_ascii(fp)) return ASCII;
-        if (is_iso8859(fp)) return ISO8859_1;
         if (is_UTF8(fp)) return UTF8;
+        if (is_iso8859(fp)) return ISO8859_1;
         return DATA;
-    }
+}
+
 
     // Error call
     int printError(char *path, int errnum) {
-        return fprintf(stdout, "%s: cannot determine (%s)\n",
+        return fprintf(stdout, "%s: cannot determ   ine (%s)\n",
                     path, strerror(errnum));
     }
 
