@@ -29,7 +29,7 @@ printf "中文测试\n" > test_files/utf82.input
 
 # Flere datafiler
 dd if=/dev/zero of=test_files/data2.input bs=1 count=10 2>/dev/null
-printf "\xFF\xFE\xFD\xFC" > test_files/data.input
+printf "\xFF\xFE\xFD\xFC" > test_files/data3.input
 
 
 

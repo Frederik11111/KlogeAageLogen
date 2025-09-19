@@ -37,7 +37,15 @@ bool is_iso8859(FILE *fp) {
     int ch;
     bool found_high = false;
     while ((ch = fgetc(fp)) != EOF) {
-        if (ch == 0 || (ch >= 128 && ch <= 159)) {
+        if (ch == 0) {
+            rewind(fp);
+            return false;
+        }
+        if (ch < 32 && ch != '\n' && ch != '\r' && ch != '\t') {
+            rewind(fp);
+            return false;
+        }
+        if (ch == 127) {
             rewind(fp);
             return false;
         }
