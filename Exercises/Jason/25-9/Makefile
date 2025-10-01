@@ -1,25 +1,10 @@
 CC=gcc
-CFLAGS=-Wall -Wextra -pedantic -std=gnu99 -g
-LDFLAGS=-lm
-PROGRAMS=test_implementation 
-TESTS=..
+CFLAGS=-O0
 
-.PHONY: all test clean ../src.zip
-
-all: $(PROGRAMS)
-
-test_implementation: test_implementation.o record.o
-	gcc -o $@ $^ $(LDFLAGS)
+all: kdtree
 
 clean:
-	rm -rf core *.o $(PROGRAMS)
+	rm -f kdtree
 
-data:
-	wget https://github.com/OSMNames/OSMNames/releases/download/v2.0.4/planet-latest_geonames.tsv.gz
-	gunzip planet-latest_geonames.tsv.gz
-
-../src.zip:
-	make clean
-	cd .. && zip src.zip -r src
-
-.SECONDARY:
+%: %.c
+	$(CC) -o $@ $(CFLAGS) $^
