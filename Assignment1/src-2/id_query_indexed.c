@@ -53,5 +53,8 @@ static const struct record* lookup_indexed(void* data, int64_t needle) {
 }
 
 int main(int argc, char** argv) {
-    return id_query_loop(argc, argv, mk_indexed, free_indexed, lookup_indexed);
+  return id_query_loop(argc, argv,
+                    (mk_index_fn)mk_indexed,
+                    (free_index_fn)free_indexed,
+                    (lookup_fn)lookup_indexed);
 }

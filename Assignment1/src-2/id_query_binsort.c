@@ -28,12 +28,10 @@ static int cmp_index_record_by_id(const void *a, const void *b) {
 }
 
 static void* mk_binsort(const struct record* rs, int n) {
-    struct binsort_data *d = (struct binsort_data*)malloc(sizeof *d);
-    if (!d) { perror("malloc"); return NULL; }
+    struct binsort_data *d = malloc(sizeof (struct binsort_data));
+    if (!d) return;
     d->n = n;
-
-    d->irs = (struct index_record*)malloc((size_t)n * sizeof *d->irs);
-    if (!d->irs) { perror("malloc"); free(d); return NULL; }
+    d->irs = malloc((size_t)n * sizeof (struct binsort_data));
 
     for (int i = 0; i < n; i++) {
         d->irs[i].osm_id = rs[i].osm_id;
@@ -70,6 +68,10 @@ static const struct record* lookup_binsort(void* data, int64_t needle) {
     return NULL;
 }
 
+
 int main(int argc, char** argv) {
-    return id_query_loop(argc, argv, mk_binsort, free_binsort, lookup_binsort);
+  return id_query_loop(argc, argv,
+                    (mk_index_fn)mk_binsort,
+                    (free_index_fn)free_binsort,
+                    (lookup_fn)lookup_binsort);
 }
