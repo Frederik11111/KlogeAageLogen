@@ -20,7 +20,7 @@ struct indexed_data {
     int n;
 };
 
-static void* mk_indexed(const struct record* rs, int n) {
+void* mk_indexed(const struct record* rs, int n) {
     struct indexed_data *d = malloc(sizeof (struct indexed_data));
     assert(d != NULL);
 
@@ -33,14 +33,14 @@ static void* mk_indexed(const struct record* rs, int n) {
     return d;
 }
 
-static void free_indexed(void* data) {
+void free_indexed(void* data) {
     struct indexed_data *d = (struct indexed_data*)data;
     if (!d) return;
     free(d ->irs);
     free(d);
 }
 
-static const struct record* lookup_indexed(void* data, int64_t needle) {
+const struct record* lookup_indexed(void* data, int64_t needle) {
     const struct indexed_data *d = (const struct indexed_data*)data;
     if (!d || !d->irs) return NULL;
 

@@ -19,7 +19,7 @@ struct binsort_data {
     int n;
 };
 
-static int cmp_index_record_by_id(const void *a, const void *b) {
+int cmp_index_record_by_id(const void *a, const void *b) {
     const struct index_record *ia = (const struct index_record *)a;
     const struct index_record *ib = (const struct index_record *)b;
     if (ia ->osm_id < ib->osm_id) return -1;
@@ -27,9 +27,9 @@ static int cmp_index_record_by_id(const void *a, const void *b) {
     return 0;
 }
 
-static void* mk_binsort(const struct record* rs, int n) {
-    struct binsort_data *d = malloc(sizeof (struct binsort_data));
-    if (!d) return;
+void* mk_binsort(const struct record* rs, int n) {
+    struct binsort_data *d = malloc(sizeof (struct index_record));
+    if (!d) return NULL;
     d->n = n;
     d->irs = malloc((size_t)n * sizeof (struct binsort_data));
 
@@ -42,14 +42,14 @@ static void* mk_binsort(const struct record* rs, int n) {
     return d;
 }
 
-static void free_binsort(void* data) {
+void free_binsort(void* data) {
     struct binsort_data *d = (struct binsort_data*)data;
     if (!d) return;
     free(d->irs);
     free(d);
 }
 
-static const struct record* lookup_binsort(void* data, int64_t needle) {
+const struct record* lookup_binsort(void* data, int64_t needle) {
     const struct binsort_data *d = (const struct binsort_data*)data;
     if (!d || !d->irs) return NULL;
 
