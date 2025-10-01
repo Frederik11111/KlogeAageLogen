@@ -21,13 +21,11 @@ struct indexed_data {
 };
 
 static void* mk_indexed(const struct record* rs, int n) {
-    struct indexed_data *d = (struct indexed_data*)malloc(sizeof *d);
-    if (!d) { perror("malloc"); return NULL; }
+    struct indexed_data *d = malloc(sizeof (struct indexed_data));
+    assert(d != NULL);
+
     d ->n = n;
-
-    d ->irs = (struct index_record*)malloc((size_t)n * sizeof *d->irs);
-    if (!d->irs) { perror("malloc"); free(d); return NULL; }
-
+    d ->irs = malloc((size_t)n * sizeof (struct index_record));
     for (int i = 0; i < n; i++) {
         d ->irs[i].osm_id = rs[i].osm_id;
         d ->irs[i].record = &rs[i];
