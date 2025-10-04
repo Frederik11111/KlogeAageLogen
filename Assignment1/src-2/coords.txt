@@ -1,0 +1,3 @@
+echo "10 10" > coords.txt
+echo "12.5 55.3" >> coords.txt
+echo "20.2 45.6" >> coords.txt
