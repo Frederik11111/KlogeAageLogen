@@ -4,8 +4,18 @@
 #include <pthread.h>
 
 struct job_queue {
-  int dummy;
+    void **buffer;              // array of void* (its the jobs)
+    int capacity;               // max number of jobs
+    int head;                   // index of next item to pop
+    int tail;                   // index of next slot to push
+    int count;                  // current number
+
+    pthread_mutex_t mutex;      // protects shared space
+    pthread_cond_t not_empty;   // signaled when a job is added
+    pthread_cond_t not_full;    // signaled when a job is removed
+    int shutting_down;          // flag used for shutting down
 };
+
 
 // Initialise a job queue with the given capacity.  The queue starts out
 // empty.  Returns non-zero on error.
