@@ -77,3 +77,12 @@ int job_queue_pop(struct job_queue *job_queue, void **data) {
   return 0;
   }
 
+  int job_queue_finish(struct job_queue *job_queue) {
+    pthread_mutex_lock(&job_queue->mutex);
+    job_queue->shutting_down = 1;
+    pthread_cond_broadcast(&job_queue->not_empty);
+    pthread_mutex_unlock(&job_queue->mutex);
+    return 0;
+}
+
+

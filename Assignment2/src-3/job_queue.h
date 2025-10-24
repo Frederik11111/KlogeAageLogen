@@ -37,4 +37,7 @@ int job_queue_push(struct job_queue *job_queue, void *data);
 // job_queue_pop() blocked), this function will return -1.
 int job_queue_pop(struct job_queue *job_queue, void **data);
 
+int job_queue_finish(struct job_queue *job_queue);
+
+
 #endif
