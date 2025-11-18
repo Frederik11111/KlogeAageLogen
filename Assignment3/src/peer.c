@@ -64,6 +64,7 @@ void* client_thread()
     return NULL;
 }
 
+
 /*
  * Function to act as basis for running the server thread. This thread will be
  * run concurrently with the client thread, but is infinite in nature.
@@ -74,6 +75,25 @@ void* server_thread()
     printf("Server thread done\n");
 
     return NULL;
+}
+
+
+void get_signature(void* password, int password_len, char* salt, hashdata_t* hash){
+    //Cominging salt and password length
+    uint total_len = password_len + SALT_LEN;
+
+    //Allocate space for the total length of password and salt in bytes
+    uint8_t combined[password_len + SALT_LEN];
+
+    // copy password
+    memcpy(combined, password, password_len);
+
+    // Merge with salt
+    memcpy(combined + password_len, salt, SALT_LEN);
+
+    // Hash using the given get_data_sha function (SHA256_HASH_SIZE=32bytes)
+    get_data_sha((char*)combined, *hash, total_len, SHA256_HASH_SIZE);
+
 }
 
 
