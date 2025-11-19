@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <math.h>
 #include <netdb.h>
 #include <sys/socket.h>
@@ -78,9 +79,9 @@ void* server_thread()
 }
 
 
-void get_signature(void* password, int password_len, char* salt, hashdata_t* hash){
+void get_signature( char *password, int password_len, char* salt, hashdata_t* hash){
     //Cominging salt and password length
-    uint total_len = password_len + SALT_LEN;
+    unsigned int total_len = password_len + SALT_LEN;
 
     //Allocate space for the total length of password and salt in bytes
     uint8_t combined[password_len + SALT_LEN];
@@ -138,6 +139,14 @@ int main(int argc, char **argv)
     char salt[SALT_LEN+1] = "0123456789ABCDEF\0";
     //generate_random_salt(salt);
     memcpy(my_address->salt, salt, SALT_LEN);
+
+    
+    // add the signature to NetworkAdress
+    get_signature(password, PASSWORD_LEN, my_address->salt, &my_address->signature);
+
+    network = malloc(sizeof(NetworkAddress_t*)); 
+    network[0] = my_address;
+    peer_count = 1;
 
     // Setup the client and server threads 
     pthread_t client_thread_id;
