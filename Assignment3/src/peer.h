@@ -34,3 +34,8 @@ typedef struct NetworkAddress {
     char salt[SALT_LEN];
     hashdata_t signature;
 } NetworkAddress_t;
+
+void send_message(NetworkAddress_t peer_address,
+                  int command,
+                  char *request_body,
+                  int request_len);
