@@ -153,9 +153,52 @@ void compute_saved_signature(hashdata_t incoming, char* salt, hashdata_t out)
 }
 
 
+void send_inform(NetworkAddress_t* target, NetworkAddress_t* new_peer){
+    char port_str[PORT_STR_LEN];
+    snprintf(port_str, PORT_STR_LEN, "%d", target->port);
+
+    int connfd = compsys_helper_open_clientfd(target->ip, port_str);
+    if (connfd < 0) {
+        fprintf(stderr, ">> Failed to connect for INFORM: %s:%d\n", target->ip, target->port);
+        return;
+    }
+
+    RequestHeader_t header;
+    memset(&header, 0, sizeof(header)); // Clear header memory
+    memcpy(header.ip, my_address->ip, IP_LEN); // Set sender IP
+    header.port = htonl(my_address->port);     // Set sender port
+    memcpy(header.signature, my_address->signature, SHA256_HASH_SIZE); // Set sender signature
+    header.command = htonl(3);
+    header.length = htonl(IP_LEN + 4 + SHA256_HASH_SIZE + SALT_LEN); // Set length of new peer info
+
+    char *body = malloc(IP_LEN + 4 + SHA256_HASH_SIZE + SALT_LEN); // Allocate body
+    int offset = 0;
+    memcpy(body + offset, new_peer->ip, IP_LEN); // Copy new peer IP
+    offset += IP_LEN;
+
+    uint32_t p = htonl(new_peer->port); // Convert new peer port to network byte order
+    memcpy(body + offset, &p, 4);        // Copy new peer port
+    offset += 4;
+
+    memcpy(body + offset, new_peer->signature, SHA256_HASH_SIZE); // Copy new peer signature
+    offset += SHA256_HASH_SIZE;
+
+    memcpy(body + offset, new_peer->salt, SALT_LEN); // Copy new peer salt
+    offset += SALT_LEN;
+
+    compsys_helper_writen(connfd, &header, sizeof(header)); // Send header
+    compsys_helper_writen(connfd, body, IP_LEN + 4 + SHA256_HASH_SIZE + SALT_LEN); // Send body
+
+    free(body);      // Free allocated body
+    close(connfd);  // Close connection
+}
+
+
 // Function to validate an IP address
 void handle_registration(int connfd, RequestHeader_t* header)
 {
+    printf("[SERVER] Received REGISTER from %s:%u\n", header->ip, ntohl(header->port));
+
     char* ip = header->ip;              // Extract IP from header
     uint32_t port = ntohl(header->port); // Extract and convert port from header
 
@@ -181,6 +224,19 @@ void handle_registration(int connfd, RequestHeader_t* header)
     network = realloc(network, sizeof(NetworkAddress_t*) * (peer_count + 1));
     network[peer_count] = new_peer;
     peer_count++;
+
+    // Log addition
+    printf("[SERVER] Added peer %s:%u. Total peers: %u\n", 
+       new_peer->ip, new_peer->port, peer_count);
+    
+
+    for (uint32_t i = 0; i < peer_count - 1; i++) {
+        send_inform(network[i], new_peer);
+        printf("[SERVER] Sending INFORM to %s:%u about new peer %s:%u\n",
+        network[i]->ip, network[i]->port,
+        new_peer->ip, new_peer->port);
+
+    }
 
     // Build payload (each entry = 68 bytes)
     int entry_size = IP_LEN + 4 + SHA256_HASH_SIZE + SALT_LEN; // 16 + 4 + 32 + 16 = 68 bytes
@@ -340,7 +396,7 @@ int main(int argc, char **argv)
     pthread_create(&server_thread_id, NULL, server_thread, NULL);
 
     // Wait for them to complete. 
-    pthread_join(client_thread_id, NULL);
+    pthread_detach(client_thread_id);
     pthread_join(server_thread_id, NULL);
 
     exit(EXIT_SUCCESS);
