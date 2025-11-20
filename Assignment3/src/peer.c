@@ -36,14 +36,15 @@ void send_inform(NetworkAddress_t *target, NetworkAddress_t *new_peer);         
 void send_message(NetworkAddress_t peer_address, int command, char *req, int req_len); // Send a message to a peer
 
 void update_network_from_payload(const uint8_t *payload, uint32_t len);                 // Update network from payload
-int receive_reply(int fd, ReplyHeader_t *header_out, uint8_t **body_out);               // Receive reply from a peer
+int receive_reply(int fd, ReplyHeader_t *header_out, uint8_t **body_out); // Receive reply from a peer
 
-
-
+//Lock 
+pthread_mutex_t network_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Client thread function
 void* client_thread()
 {
+    //Registration
     char peer_ip[IP_LEN];                               // Buffer for peer IP input
     fprintf(stdout, "Enter peer IP to connect to: ");   // Prompt for peer IP
     scanf("%15s", peer_ip);                             // Read peer IP input               
@@ -65,7 +66,6 @@ void* client_thread()
     // Send REGISTER command to another peer
     send_message(peer_address, COMMAND_REGISTER, NULL, 0);
 
-    printf("Client thread done\n");
     return NULL;
 }
 
@@ -122,11 +122,19 @@ void* handle_connection(void *arg)
 // Check if a peer exists in the network
 int peer_exists(char *ip, uint32_t port)
 {
-    for (uint32_t i = 0; i < peer_count; i++) {
-        if (strcmp(network[i]->ip, ip) == 0 && network[i]->port == port)   // Compare IP and port
-            return 1;
+    int exists = 0;
+
+    pthread_mutex_lock(&network_mutex);
+    for (uint32_t i = 0; i < peer_count; i++) { 
+        if (strcmp(network[i]->ip, ip) == 0 &&
+            network[i]->port == port) { // Compare IP and port
+            exists = 1;
+            break;
+        }
     }
-    return 0;
+    pthread_mutex_unlock(&network_mutex);
+
+    return exists;
 }
 
 // Compute saved signature
@@ -203,6 +211,37 @@ void handle_inform(RequestHeader_t *header, int connfd)
     uint32_t port = ntohl(port_net);
     offset += 4;
 
+    
+    uint8_t signature[SHA256_HASH_SIZE];
+    memcpy(signature, buffer + offset, SHA256_HASH_SIZE);
+    offset += SHA256_HASH_SIZE;
+
+    uint8_t salt[SALT_LEN];
+    memcpy(salt, buffer + offset, SALT_LEN);
+    offset += SALT_LEN;
+
+    // ignore if known
+    if (peer_exists(ip, port)) {
+        printf("[SERVER] INFORM: peer already known\n");
+        return;
+    }
+
+    // add new peer
+    NetworkAddress_t *na = malloc(sizeof(NetworkAddress_t));
+    memcpy(na->ip, ip, IP_LEN);
+    na->port = port;
+    memcpy(na->signature, signature, SHA256_HASH_SIZE);
+    memcpy(na->salt, salt, SALT_LEN);
+
+    pthread_mutex_lock(&network_mutex);
+    network = realloc(network, sizeof(NetworkAddress_t*) * (peer_count + 1));
+    network[peer_count] = na;
+    peer_count++;
+    pthread_mutex_unlock(&network_mutex);
+
+
+    printf("[SERVER] INFORM added peer %s:%u\n", ip, port);
+
 }
 
 
@@ -253,7 +292,8 @@ void handle_registration(int connfd, RequestHeader_t *header)
 
     generate_random_salt(new_peer->salt);                      // Generate random salt for new peer
     compute_saved_signature(header->signature, new_peer->salt, new_peer->signature);    // Compute signature for new peer
-
+    
+    pthread_mutex_lock(&network_mutex);
     network = realloc(network, sizeof(NetworkAddress_t *) * (peer_count + 1));  // Reallocate network array to accommodate new peer
     network[peer_count] = new_peer;                                             // Add new peer to network
     peer_count++;                                                               // Increment peer count        
@@ -266,6 +306,7 @@ void handle_registration(int connfd, RequestHeader_t *header)
                network[i]->ip, network[i]->port);              
         send_inform(network[i], new_peer);                      
     }
+
 
     int payload_len = peer_count * PEER_ADDR_LEN;            // Calculate payload length
     uint8_t *payload = malloc(payload_len);                 // Allocate memory for payload  
@@ -285,6 +326,8 @@ void handle_registration(int connfd, RequestHeader_t *header)
         memcpy(payload + offset, network[i]->salt, SALT_LEN);   // Copy peer salt to payload        
         offset += SALT_LEN;                                  // Update offset       
     }
+    pthread_mutex_unlock(&network_mutex);
+
 
     ReplyHeader_t reply;                                // Reply header structure
     reply.length = htonl(payload_len);                  // Set length of payload
@@ -369,7 +412,8 @@ void update_network_from_payload(const uint8_t *payload, uint32_t len)
     }
 
     uint32_t count = len / PEER_ADDR_LEN;   // Calculate number of peers in payload
- 
+    
+    pthread_mutex_lock(&network_mutex);
     network = realloc(network, count * sizeof(NetworkAddress_t *)); // Reallocate network array to accommodate new peers
     peer_count = count;                                              // Update peer count    
 
@@ -393,6 +437,8 @@ void update_network_from_payload(const uint8_t *payload, uint32_t len)
 
         network[i] = na;                                          // Add new peer to network
     } 
+    pthread_mutex_unlock(&network_mutex);
+
 
     printf("Network now has %u peers:\n", peer_count);
     for (uint32_t i = 0; i < peer_count; i++)
