@@ -83,55 +83,55 @@ void* client_thread()
  */
 void* server_thread()
 {
-    char port_str[PORT_STR_LEN];
-    snprintf(port_str, PORT_STR_LEN, "%d", my_address->port);
+    char port_str[PORT_STR_LEN];                                // String version of port
+    snprintf(port_str, PORT_STR_LEN, "%d", my_address->port);   // Convert to string
 
-    int listenfd = compsys_helper_open_listenfd(port_str);
+    int listenfd = compsys_helper_open_listenfd(port_str);      // Open listening socket
     if (listenfd < 0) {
-        fprintf(stderr, ">> Error opening listening socket on port %s\n", port_str);
-        pthread_exit(NULL);
+        fprintf(stderr, ">> Error opening listening socket on port %s\n", port_str); 
+        pthread_exit(NULL); 
     }
 
-    while (1) {
-        int connfd = accept(listenfd, NULL, NULL);
-        if (connfd < 0) continue;
+    while (1) {                                             // Infinite loop to accept connections
+        int connfd = accept(listenfd, NULL, NULL);          // Accept connection
+        if (connfd < 0) continue;       
 
-        pthread_t tid;
-        pthread_create(&tid, NULL, handle_connection, (void*)(intptr_t)connfd);
-        pthread_detach(tid);
+        pthread_t tid;                                                          // Create thread to handle connection
+        pthread_create(&tid, NULL, handle_connection, (void*)(intptr_t)connfd); // Pass connfd as argument
+        pthread_detach(tid);                                                    // Detach thread to reclaim resources on completion
     }
 
     return NULL;
 }
 
-
-void* handle_connection(void* arg)
+// Function to handle each incoming connection to the peer server
+void* handle_connection(void* arg) 
 {
-    int connfd = (intptr_t)arg;
+    int connfd = (intptr_t)arg; // Retrieve connfd from argument
 
-    RequestHeader_t header;
-    ssize_t r = compsys_helper_readn(connfd, &header, sizeof(RequestHeader_t));
+    RequestHeader_t header;     // Declare header to read into
+    ssize_t r = compsys_helper_readn(connfd, &header, sizeof(RequestHeader_t)); // Read header
     if (r <= 0) {
         close(connfd);
         return NULL;
     }
 
-    uint32_t command = ntohl(header.command);
+    uint32_t command = ntohl(header.command); // Convert command to host byte order
 
     if (command == 1) {
-        handle_registration(connfd, &header);
+        handle_registration(connfd, &header); 
     }
 
     close(connfd);
     return NULL;
 }
 
-
+// Function to check if a peer already exists in the network list
 int peer_exists(char* ip, uint32_t port)
 {
-    for (uint32_t i = 0; i < peer_count; i++) {
-        if (strcmp(network[i]->ip, ip) == 0 &&
-            network[i]->port == port) 
+    for (uint32_t i = 0; i < peer_count; i++) { 
+        if (strcmp(network[i]->ip, ip) == 0 &&      // compare IPs
+            network[i]->port == port)               // compare ports
         {
             return 1;
         }
@@ -139,31 +139,35 @@ int peer_exists(char* ip, uint32_t port)
     return 0;
 }
 
+
+// Function to compute the saved signature for a peer during registration
 void compute_saved_signature(hashdata_t incoming, char* salt, hashdata_t out)
 {
-    uint8_t buf[SHA256_HASH_SIZE + SALT_LEN];
-    memcpy(buf, incoming, SHA256_HASH_SIZE);
-    memcpy(buf + SHA256_HASH_SIZE, salt, SALT_LEN);
+    uint8_t buf[SHA256_HASH_SIZE + SALT_LEN]; // Buffer to hold incoming signature and salt
+    memcpy(buf, incoming, SHA256_HASH_SIZE);  // Copy incoming signature
+    memcpy(buf + SHA256_HASH_SIZE, salt, SALT_LEN);  // Append salt
 
-    get_data_sha((char*)buf, out, SHA256_HASH_SIZE + SALT_LEN, SHA256_HASH_SIZE);
+    get_data_sha((char*)buf, out, SHA256_HASH_SIZE + SALT_LEN, SHA256_HASH_SIZE); // Compute SHA256 hash
 }
 
+
+// Function to validate an IP address
 void handle_registration(int connfd, RequestHeader_t* header)
 {
-    char* ip = header->ip;
-    uint32_t port = ntohl(header->port);
+    char* ip = header->ip;              // Extract IP from header
+    uint32_t port = ntohl(header->port); // Extract and convert port from header
 
-    // STEP 1: Reject duplicates
+    // Reject duplicates
     if (peer_exists(ip, port)) {
         // Important: registration reply MUST still be returned,
         // just with same peer list.
         // For simplicity, we accept duplicates silently here.
     }
 
-    // STEP 2: Allocate new peer
-    NetworkAddress_t* new_peer = malloc(sizeof(NetworkAddress_t));
-    memcpy(new_peer->ip, ip, IP_LEN);
-    new_peer->port = port;
+    // Allocate new peer
+    NetworkAddress_t* new_peer = malloc(sizeof(NetworkAddress_t)); // Fill in new peer details
+    memcpy(new_peer->ip, ip, IP_LEN);                              // Copy IP address   
+    new_peer->port = port;                                         // Set port
 
     // Server generates salt
     generate_random_salt(new_peer->salt);
@@ -171,35 +175,35 @@ void handle_registration(int connfd, RequestHeader_t* header)
     // Saved signature = SHA256( incoming_signature + salt )
     compute_saved_signature(header->signature, new_peer->salt, new_peer->signature);
 
-    // STEP 3: Add peer to network list
+    // Add peer to network list
     network = realloc(network, sizeof(NetworkAddress_t*) * (peer_count + 1));
     network[peer_count] = new_peer;
     peer_count++;
 
-    // STEP 4: Build payload (each entry = 68 bytes)
-    int entry_size = IP_LEN + 4 + SHA256_HASH_SIZE + SALT_LEN;
-    int payload_len = peer_count * entry_size;
+    // Build payload (each entry = 68 bytes)
+    int entry_size = IP_LEN + 4 + SHA256_HASH_SIZE + SALT_LEN; // 16 + 4 + 32 + 16 = 68 bytes
+    int payload_len = peer_count * entry_size;                 // Total payload length
 
-    char* payload = malloc(payload_len);
+    char* payload = malloc(payload_len);                     // Allocate payload
     int offset = 0;
 
     for (uint32_t i = 0; i < peer_count; i++) {
 
-        memcpy(payload + offset, network[i]->ip, IP_LEN);
-        offset += IP_LEN;
+        memcpy(payload + offset, network[i]->ip, IP_LEN);      // Copy IP address
+        offset += IP_LEN;                                       
 
-        uint32_t p = htonl(network[i]->port);
-        memcpy(payload + offset, &p, 4);
+        uint32_t p = htonl(network[i]->port);                  // Convert port to network byte order
+        memcpy(payload + offset, &p, 4);                
         offset += 4;
 
-        memcpy(payload + offset, network[i]->signature, SHA256_HASH_SIZE);
+        memcpy(payload + offset, network[i]->signature, SHA256_HASH_SIZE); // Copy signature
         offset += SHA256_HASH_SIZE;
 
-        memcpy(payload + offset, network[i]->salt, SALT_LEN);
+        memcpy(payload + offset, network[i]->salt, SALT_LEN);             // Copy salt
         offset += SALT_LEN;
     }
 
-    // STEP 5: Build reply header
+    // Build reply header
     ReplyHeader_t reply;
     reply.length      = htonl(payload_len);
     reply.status      = htonl(1);
@@ -212,15 +216,15 @@ void handle_registration(int connfd, RequestHeader_t* header)
     // For 1 block: total hash = block hash
     memcpy(reply.total_hash, reply.block_hash, SHA256_HASH_SIZE);
 
-    // STEP 6: Send it
-    compsys_helper_writen(connfd, &reply, sizeof(reply));
-    compsys_helper_writen(connfd, payload, payload_len);
+    //  Send it
+    compsys_helper_writen(connfd, &reply, sizeof(reply)); // Send reply header
+    compsys_helper_writen(connfd, payload, payload_len);    // Send payload
 
     free(payload);
 }
 
 
-
+// Function to compute the signature given password and salt
 void get_signature( char *password, int password_len, char* salt, hashdata_t* hash){
     //Cominging salt and password length
     unsigned int total_len = password_len + SALT_LEN;
