@@ -69,6 +69,8 @@ void* client_thread()
     NetworkAddress_t peer_address;
     memcpy(peer_address.ip, peer_ip, IP_LEN);
     peer_address.port = atoi(peer_port);
+    send_message(peer_address, COMMAND_REGISTER, NULL, 0);
+
 
     // You should never see this printed in your finished implementation
     printf("Client thread done\n");
@@ -243,6 +245,43 @@ void get_signature( char *password, int password_len, char* salt, hashdata_t* ha
 
 }
 
+void send_message(NetworkAddress_t peer_address, int command, char* request_body, int request_len){
+    //Build string and convert to char.
+    char port_str[PORT_STR_LEN];
+    sprintf(port_str, "%u", peer_address.port);
+
+    //open client socket
+    int clientfd = compsys_helper_open_clientfd(peer_address.ip, port_str);
+      if (clientfd < 0) {
+        fprintf(stderr, "Failed to connect  %s:%s\n", peer_address.ip, port_str);
+        return;
+    }
+    //Building the header
+    RequestHeader_t header;
+    memset(&header, 0, sizeof(header)); //clear the header memory space
+    memcpy(header.ip, my_address->ip, IP_LEN);
+    header.port = htonl(my_address->port);
+    memcpy(header.signature, my_address->signature, SHA256_HASH_SIZE);
+    header.command = htonl(command);
+    header.length = htonl(request_len);
+
+    //combine header and body
+    int total_len = REQUEST_HEADER_LEN + request_len;
+    uint8_t buffer[REQUEST_HEADER_LEN + MAX_MSG_LEN];
+    memcpy(buffer, &header, REQUEST_HEADER_LEN);
+
+
+    if (request_len > 0 && request_body != NULL) { // add the body if neeeded
+        memcpy(buffer + REQUEST_HEADER_LEN, request_body, request_len);
+    }
+
+    if (compsys_helper_writen(clientfd, buffer, total_len) < 0) {
+        perror("write");
+        close(clientfd);
+        return;
+    }
+
+}
 
 int main(int argc, char **argv)
 {
