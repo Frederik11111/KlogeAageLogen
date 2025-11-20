@@ -1,21 +1,20 @@
-#include <stdlib.h>          // Standard library (malloc, free, exit, atoi, etc.)
-#include <stdio.h>           // Standard I/O (printf, fprintf, scanf, etc.)
-#include <stdint.h>          // Fixed-width integer types (uint32_t, uint8_t, etc.)
-#include <math.h>            // Math functions (not heavily used here)
-#include <netdb.h>           // Network database operations (getaddrinfo, etc.)
-#include <sys/socket.h>      // Socket API (socket, accept, etc.)
-#include <arpa/inet.h>       // Internet operations (htonl, ntohl, inet_pton, etc.)
-#include <string.h>          // String operations (memcpy, memset, strcmp, etc.)
-#include <time.h>            // Time-related functions (rand seeding if used elsewhere)
+#include <stdlib.h>          
+#include <stdio.h>           
+#include <stdint.h>          
+#include <math.h>            
+#include <netdb.h>           
+#include <sys/socket.h>      
+#include <arpa/inet.h>       
+#include <string.h>          
+#include <time.h>            
 
 #ifdef __APPLE__
-#include "./endian.h"        // Custom endian helpers for macOS
+#include "./endian.h"        
 #else
-#include <endian.h>          // Endian helpers on Linux/other systems
+#include <endian.h>          
 #endif
 
-#include "./peer.h"          // Project-specific declarations (types, constants, helpers, etc.)
-
+#include "./peer.h"          
 
 
 // Global variables to be used by both the server and client side of the peer.
