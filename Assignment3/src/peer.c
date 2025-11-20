@@ -33,6 +33,9 @@ void* handle_connection(void* arg);
 void handle_registration(int connfd, RequestHeader_t* header);
 int peer_exists(char* ip, uint32_t port);
 void compute_saved_signature(hashdata_t incoming, char* salt, hashdata_t out);
+void send_message(NetworkAddress_t peer_address, int command, char* request_body, int request_len);
+int receive_reply(int fd, ReplyHeader_t *header_out, uint8_t **body_out);
+void update_network_from_payload(const uint8_t *payload, uint32_t len);
 
 
 /*
@@ -248,7 +251,7 @@ void send_message(NetworkAddress_t peer_address, int command, char* request_body
 
     //open client socket
     int clientfd = compsys_helper_open_clientfd(peer_address.ip, port_str);
-      if (clientfd < 0) {
+    if (clientfd < 0) {
         fprintf(stderr, "Failed to connect  %s:%s\n", peer_address.ip, port_str);
         return;
     }
@@ -266,17 +269,125 @@ void send_message(NetworkAddress_t peer_address, int command, char* request_body
     uint8_t buffer[REQUEST_HEADER_LEN + MAX_MSG_LEN];
     memcpy(buffer, &header, REQUEST_HEADER_LEN);
 
-
-    if (request_len > 0 && request_body != NULL) { // add the body if neeeded
-        memcpy(buffer + REQUEST_HEADER_LEN, request_body, request_len);
-    }
-
     if (compsys_helper_writen(clientfd, buffer, total_len) < 0) {
         perror("write");
         close(clientfd);
         return;
     }
 
+    ReplyHeader_t reply_header;
+    uint8_t *body = NULL;
+
+    if (receive_reply(clientfd, &reply_header, &body) < 0) {
+        close(clientfd);
+        return;
+    }
+
+    // update network if register
+    if (reply_header.status == STATUS_OK && command == COMMAND_REGISTER) {
+        update_network_from_payload(body, reply_header.length);
+    }
+    printf("Got reply: status=%u, length=%u\n",
+       reply_header.status, reply_header.length);
+
+    free(body);
+    close(clientfd);
+
+}
+
+void update_network_from_payload(const uint8_t *payload, uint32_t len)
+{
+    if (len % PEER_ADDR_LEN != 0) {
+        fprintf(stderr, "Bad network payload length %u (not multiple of %d)\n",
+                len, PEER_ADDR_LEN);
+        return;
+    }
+
+    uint32_t count = len / PEER_ADDR_LEN;
+
+    // free old network if you want, or just overwrite for now
+    if (network != NULL) {
+        // free existing entries, then free network itself
+    }
+
+    network = malloc(count * sizeof(NetworkAddress_t*));
+    if (!network) {
+        fprintf(stderr, "malloc failed for network\n");
+        peer_count = 0;
+        return;
+    }
+
+    size_t offset = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        NetworkAddress_t *na = malloc(sizeof(NetworkAddress_t));
+        if (!na) {
+            // handle error
+            break;
+        }
+
+        // 1) IP (16 bytes)
+        memcpy(na->ip, payload + offset, IP_LEN);
+        na->ip[IP_LEN - 1] = '\0';  // ensure string ends
+        offset += IP_LEN;
+
+        // 2) port (4 bytes, network order)
+        uint32_t port_net;
+        memcpy(&port_net, payload + offset, sizeof(uint32_t));
+        na->port = ntohl(port_net);
+        offset += sizeof(uint32_t);
+
+        // 3) signature (32 bytes)
+        memcpy(na->signature, payload + offset, SHA256_HASH_SIZE);
+        offset += SHA256_HASH_SIZE;
+
+        // 4) salt (16 bytes)
+        memcpy(na->salt, payload + offset, SALT_LEN);
+        offset += SALT_LEN;
+
+        network[i] = na;
+    }
+
+    peer_count = count;
+
+    printf("Network now has %u peers:\n", peer_count);
+    for (uint32_t i = 0; i < peer_count; i++) {
+        printf("  %s:%u\n", network[i]->ip, network[i]->port);
+    }
+}
+
+int receive_reply(int fd, ReplyHeader_t *header_out, uint8_t **body_out)
+{
+    ReplyHeader_t header;
+
+    // read BASIC HEADER first
+    ssize_t n = compsys_helper_readn(fd, &header, REPLY_HEADER_LEN);
+    if (n != REPLY_HEADER_LEN) {
+        return -1;
+    }
+
+    // convert fields
+    header.length      = ntohl(header.length);
+    header.status      = ntohl(header.status);
+    header.this_block  = ntohl(header.this_block);
+    header.block_count = ntohl(header.block_count);
+
+    // give parsed header back to caller
+    *header_out = header;
+
+    // allocate body
+    uint8_t *body = NULL;
+    if (header.length > 0) {
+        body = malloc(header.length);
+
+        n = compsys_helper_readn(fd, body, header.length);
+        if (n != header.length) {
+            free(body);
+            return -1;
+        }
+    }
+
+    *body_out = body;
+    return 0;
 }
 
 int main(int argc, char **argv)
