@@ -46,14 +46,14 @@ void* client_thread()
 {
     char peer_ip[IP_LEN];                               // Buffer for peer IP input
     fprintf(stdout, "Enter peer IP to connect to: ");   // Prompt for peer IP
-    scanf("%16s", peer_ip);                             // Read peer IP input               
+    scanf("%15s", peer_ip);                             // Read peer IP input               
 
     for (int i = strlen(peer_ip); i < IP_LEN; i++)
         peer_ip[i] = '\0';                             // Null-terminate the IP string          
 
     char peer_port[PORT_STR_LEN];                      // Buffer for peer port input        
     fprintf(stdout, "Enter peer port to connect to: "); // Prompt for peer port 
-    scanf("%16s", peer_port);                           // Read peer port input                
+    scanf("%7s", peer_port);                           // Read peer port input                
 
     for (int i = strlen(peer_port); i < PORT_STR_LEN; i++) 
         peer_port[i] = '\0';                            // Null-terminate the port string      
@@ -106,6 +106,8 @@ void* handle_connection(void *arg)
     }
 
     uint32_t command = ntohl(header.command);        // Convert command to host byte order      
+    uint32_t length  = ntohl(header.length); //Convert lenght to host byte order
+
 
     if (command == COMMAND_REGISTER)
         handle_registration(connfd, &header);       // Handle REGISTER command  
@@ -185,11 +187,22 @@ void send_inform(NetworkAddress_t *target, NetworkAddress_t *new_peer)
 void handle_inform(RequestHeader_t *header, int connfd)
 {
     uint8_t buffer[PEER_ADDR_LEN];               // Buffer for incoming peer information
-    compsys_helper_readn(connfd, buffer, PEER_ADDR_LEN); // Read peer information into buffer 
+    if (compsys_helper_readn(connfd, buffer, PEER_ADDR_LEN) != PEER_ADDR_LEN) {
+        return; }   // Read peer information into buffer 
 
     printf("[SERVER] Received INFORM\n");
+    
+    size_t offset = 0;
+    char ip[IP_LEN];
+    memcpy(ip, buffer + offset, IP_LEN);
+    ip[IP_LEN - 1] = '\0';
+    offset += IP_LEN;
 
-    update_network_from_payload(buffer, PEER_ADDR_LEN);  // Update network with new peer information
+    uint32_t port_net;
+    memcpy(&port_net, buffer + offset, 4);
+    uint32_t port = ntohl(port_net);
+    offset += 4;
+
 }
 
 
@@ -221,7 +234,15 @@ void handle_registration(int connfd, RequestHeader_t *header)
     uint32_t port = ntohl(header->port);          // Extract port from header
  
     if (peer_exists(ip, port)) {
-        printf("[SERVER] Duplicate peer ignored.\n");
+        ReplyHeader_t reply;
+        reply.length = htonl(0);
+        reply.status = htonl(STATUS_PEER_EXISTS);
+        reply.this_block = htonl(0);
+        reply.block_count = htonl(1);
+        memset(reply.block_hash, 0, SHA256_HASH_SIZE);
+        memset(reply.total_hash, 0, SHA256_HASH_SIZE);
+
+        compsys_helper_writen(connfd, &reply, REPLY_HEADER_LEN);
         return;
     }
 
@@ -328,9 +349,8 @@ void send_message(NetworkAddress_t peer_address, int command,
     uint8_t *reply_body = NULL;                 // Pointer for reply body
 
     if (receive_reply(clientfd, &reply, &reply_body) == 0) {
-        if (command == COMMAND_REGISTER && reply.status == STATUS_OK) // On successful REGISTER reply
-            update_network_from_payload(reply_body, reply.length);  // Update network with received payload
-
+        if (command == COMMAND_REGISTER && reply.status == STATUS_OK && reply.length > 0) // On successful REGISTER reply
+        update_network_from_payload(reply_body, reply.length); // Update network with received payload
         printf("Got reply: status=%u length=%u\n",
                reply.status, reply.length);
     }
@@ -434,7 +454,7 @@ int main(int argc, char **argv)
 
     char password[PASSWORD_LEN];
     printf("Create a password to proceed: ");
-    scanf("%16s", password);
+    scanf("%15s", password);
 
     for (int i = strlen(password); i < PASSWORD_LEN; i++)
         password[i] = '\0';
