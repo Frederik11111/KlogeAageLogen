@@ -16,6 +16,8 @@
 
 #include "./peer.h"          
 
+// Define Maximum Payload size (Max Message 8196 - Header 80 = 8116)
+#define MAX_PAYLOAD (MAX_MSG_LEN - REPLY_HEADER_LEN)
 
 // Global variables to be used by both the server and client side of the peer.
 NetworkAddress_t *my_address;        // This peer's own network address
@@ -127,64 +129,96 @@ void* server_thread()
     return NULL;                                                // Unreachable, but keeps compiler happy
 }
 
-// Handle RETRIEVE request: read filename, send file contents + hash back
+// Handle RETRIEVE request: Send file in blocks (Task 2.5)
 void handle_retrieve(int connfd, RequestHeader_t *header) {
-    // 1. Read the filename from the connection
-    char filename[PATH_LEN];                         // Buffer for filename
-    // Ensure we don't overflow buffer if header->length is huge
-    int read_len = (header->length < PATH_LEN - 1) ? header->length : PATH_LEN - 1;
+    char filename[PATH_LEN];
+    uint32_t req_len = ntohl(header->length); 
+    int read_len = (req_len < PATH_LEN - 1) ? req_len : PATH_LEN - 1;
     
-    if (compsys_helper_readn(connfd, filename, read_len) != read_len) return; // Read filename body
-    filename[read_len] = '\0';                                                // Null-terminate filename
+    if (compsys_helper_readn(connfd, filename, read_len) != read_len) return;
+    filename[read_len] = '\0';
 
-    printf("[SERVER] Received RETRIEVE request for file: %s\n", filename);
+    if (filename[0] == '/') memmove(filename, filename + 1, strlen(filename));
 
-    // Security: Remove leading '/' to prevent absolute path traversal 
-    if (filename[0] == '/') {
-        memmove(filename, filename + 1, strlen(filename));    // Shift string left by 1 char
-    }
+    printf("[SERVER] Sending file: %s\n", filename);
 
-    // Open requested file in binary read mode
     FILE *fp = fopen(filename, "rb");
     if (!fp) {
-        // File not found or cannot be opened: send error reply
-        ReplyHeader_t reply;
-        memset(&reply, 0, sizeof(reply));                     // Zero out reply
-        reply.status = htonl(STATUS_BAD_REQUEST);             // Indicate error
-        compsys_helper_writen(connfd, &reply, sizeof(reply)); // Send reply header only
+        ReplyHeader_t reply = {0};
+        reply.status = htonl(STATUS_BAD_REQUEST);
+        reply.block_count = htonl(1);
+        compsys_helper_writen(connfd, &reply, sizeof(reply));
         return;
     }
 
-    // Get file size by seeking to end and using ftell
     fseek(fp, 0L, SEEK_END);
-    uint32_t file_size = ftell(fp);                           // Determine file size in bytes
-    rewind(fp);                                               // Go back to file start for reading
+    uint32_t file_size = ftell(fp);
+    rewind(fp);
 
-    // Read entire file content into buffer
-    // Note: For Task 2.4 we assume file fits in one message 
-    // We need to cap it just in case (not strictly enforced here, but note the assumption)
-    uint8_t *file_buf = malloc(file_size);                    // Allocate buffer of file_size bytes
-    fread(file_buf, 1, file_size, fp);                        // Read file into buffer
-    fclose(fp);                                               // Close file
+    hashdata_t total_hash;
+    uint8_t *all_data = malloc(file_size);
+    if (fread(all_data, 1, file_size, fp) != file_size) {
+        free(all_data); fclose(fp); return;
+    }
+    get_data_sha((char*)all_data, total_hash, file_size, SHA256_HASH_SIZE);
+    free(all_data);
+    rewind(fp);
 
-    // Hash the data using SHA256 
-    hashdata_t file_hash;                                     // Buffer for computed hash
-    get_data_sha((char*)file_buf, file_hash, file_size, SHA256_HASH_SIZE);
+    uint32_t total_blocks = (file_size + MAX_PAYLOAD - 1) / MAX_PAYLOAD;
+    if (total_blocks == 0) total_blocks = 1;
 
-    // Prepare and send reply header + file data
-    ReplyHeader_t reply;
-    reply.length = htonl(file_size);                          // Length of file in network order
-    reply.status = htonl(STATUS_OK);                          // Indicate success
-    reply.this_block = htonl(0);                              // Single block, index 0
-    reply.block_count = htonl(1);                             // Only 1 block returned
-    memcpy(reply.block_hash, file_hash, SHA256_HASH_SIZE);    // Per-block hash
-    memcpy(reply.total_hash, file_hash, SHA256_HASH_SIZE);    // Total hash same as block hash
+    uint8_t *buffer = malloc(MAX_PAYLOAD);
+    
+    // Allocate a "packet buffer" big enough for Header + Max Payload
+    // This allows us to send everything in one atomic write
+    size_t max_packet_size = sizeof(ReplyHeader_t) + MAX_PAYLOAD;
+    uint8_t *packet_buffer = malloc(max_packet_size);
 
-    compsys_helper_writen(connfd, &reply, sizeof(reply));     // Send reply header
-    compsys_helper_writen(connfd, file_buf, file_size);       // Send file data as body
+    for (uint32_t i = 0; i < total_blocks; i++) {
+        memset(buffer, 0, MAX_PAYLOAD);
 
-    free(file_buf);                                           // Free temporary buffer
-    printf("[SERVER] Sent file %s (%u bytes)\n", filename, file_size);
+        uint32_t bytes_to_read = MAX_PAYLOAD;
+        if (i == total_blocks - 1) {
+            uint32_t remaining = file_size - (i * MAX_PAYLOAD);
+            if (remaining > 0) bytes_to_read = remaining;
+        }
+
+        size_t actual_read = fread(buffer, 1, bytes_to_read, fp);
+        uint32_t payload_len = (uint32_t)actual_read;
+
+        ReplyHeader_t reply = {0};
+        reply.length = htonl(payload_len);
+        reply.status = htonl(STATUS_OK);
+        reply.this_block = htonl(i);
+        reply.block_count = htonl(total_blocks);
+        
+        memcpy(reply.total_hash, total_hash, SHA256_HASH_SIZE);
+        get_data_sha((char*)buffer, reply.block_hash, payload_len, SHA256_HASH_SIZE);
+
+        // --- SINGLE SHOT SENDING LOGIC ---
+        
+        // 1. Copy Header to start of packet
+        memcpy(packet_buffer, &reply, sizeof(ReplyHeader_t));
+        
+        // 2. Copy Body to directly after Header
+        memcpy(packet_buffer + sizeof(ReplyHeader_t), buffer, payload_len);
+        
+        // 3. Calculate total size of this specific packet
+        size_t packet_len = sizeof(ReplyHeader_t) + payload_len;
+
+        // 4. Send it all at once
+        compsys_helper_writen(connfd, packet_buffer, packet_len);
+        
+        // ---------------------------------
+
+        // 1ms sleep. Slows transfer down to ~80KB/s, but guarantees stability.
+        //usleep(1000); 
+    }
+
+    free(packet_buffer);
+    free(buffer);
+    fclose(fp);
+    printf("[SERVER] Completed transfer of %s (%u blocks)\n", filename, total_blocks);
 }
 
 // Pick a random peer from the network
@@ -215,15 +249,19 @@ void* handle_connection(void *arg)
 {
     int connfd = (intptr_t)arg;                  // Connection file descriptor passed as (void*)      
     RequestHeader_t header;                      // Request header structure        
+    printf("[DEBUG] Accepted new connection (fd: %d)\n", connfd); 
 
     // Read request header from connection
     if (compsys_helper_readn(connfd, &header, sizeof(header)) <= 0) {
+        printf("[DEBUG] Failed to read header or connection closed\n"); 
         close(connfd);                           // If read fails, close connection
         return NULL;
     }
 
     uint32_t command = ntohl(header.command);    // Convert command field to host byte order      
     uint32_t length  = ntohl(header.length);     // Convert length field to host byte order (unused directly)
+
+    printf("[DEBUG] Header Read -> Cmd: %u, Len: %u\n", command, length);
 
     // Dispatch based on command type
     if (command == COMMAND_REGISTER)
@@ -234,6 +272,9 @@ void* handle_connection(void *arg)
 
     else if (command == COMMAND_RETREIVE)        // Handle RETRIEVE command
         handle_retrieve(connfd, &header);
+    else {
+        printf("[DEBUG] Unknown command received: %u\n", command);
+    }
 
     close(connfd);                               // Close this client connection when done
     return NULL;
@@ -531,29 +572,55 @@ void send_message(NetworkAddress_t peer_address, int command,
             // Reply body contains updated network list
             update_network_from_payload(reply_body, reply.length);
         }
-        // Case 2: Retrieve Response (Task 2.4)
-        else if (command == COMMAND_RETREIVE && reply.status == STATUS_OK) {
-            printf("Receiving file data (%u bytes)...\n", reply.length);
+        // Case 2: Retrieve Response (Task 2.4/2.5 Multi-block)
+     else if (command == COMMAND_RETREIVE && reply.status == STATUS_OK) {
+        
+        FILE *fp = fopen(body, "wb"); // Open file once
+        if (!fp) {
+            printf("Error opening file for writing.\n");
+            free(reply_body);
+            close(clientfd);
+            return;
+        }
+
+        // We have the first block already (in reply/reply_body)
+        // We need to loop until we have all blocks.
+        
+        uint32_t total_blocks = reply.block_count; // How many to expect
+        uint32_t blocks_received = 0;
+
+        while (blocks_received < total_blocks) {
             
-            // Validate hash of received file data
-            hashdata_t check_hash;
-            get_data_sha((char*)reply_body, check_hash, reply.length, SHA256_HASH_SIZE);
+            // Fix for out-of-order packets (Task 2.5)
+            // Calculate the file offset: block_number * MAX_PAYLOAD
+            long offset = (long)reply.this_block * MAX_PAYLOAD;
             
-            if (memcmp(check_hash, reply.total_hash, SHA256_HASH_SIZE) == 0) {
-                // Hash matches, write data to file. 
-                // Use the filename stored in 'body' (the request argument).
-                FILE *fp = fopen(body, "wb"); 
-                if (fp) {
-                    fwrite(reply_body, 1, reply.length, fp);   // Write all received bytes to file
-                    fclose(fp);
-                    printf("File '%s' saved successfully.\n", body);
-                } else {
-                    printf("Error writing to file.\n");
+            // Seek to the correct position in the file
+            fseek(fp, offset, SEEK_SET);
+
+            printf("Received block %u/%u (%u bytes)\n", 
+                   reply.this_block + 1, total_blocks, reply.length);
+
+            // Write to file at the correct position
+            fwrite(reply_body, 1, reply.length, fp);
+            free(reply_body); // Free the body we just used
+            reply_body = NULL; // Safety
+
+            blocks_received++;
+
+            // 3. If we still expect more blocks, read the next reply
+            if (blocks_received < total_blocks) {
+                if (receive_reply(clientfd, &reply, &reply_body) != 0) {
+                    printf("Error: Connection closed before all blocks received.\n");
+                    break;
                 }
-            } else {
-                printf("Error: File hash mismatch! Data corrupted.\n");
+                // Loop continues with new reply/body
             }
         }
+        
+        fclose(fp);
+        printf("File '%s' transfer complete.\n", body);
+    }
         else {
             // For other commands or non-OK status, just log basic info
             printf("Got reply: status=%u length=%u\n", reply.status, reply.length);
