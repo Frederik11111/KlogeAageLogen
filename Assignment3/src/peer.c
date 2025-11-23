@@ -242,11 +242,9 @@ void* handle_connection(void *arg)
 {
     int connfd = (intptr_t)arg;                       
     RequestHeader_t header;                      // Request header structure        
-    printf("[DEBUG] Accepted new connection (fd: %d)\n", connfd); 
 
     // Read request header from connection
     if (compsys_helper_readn(connfd, &header, sizeof(header)) <= 0) {
-        printf("[DEBUG] Failed to read header or connection closed\n"); 
         close(connfd);                           // If read fails, close connection
         return NULL;
     }
@@ -254,23 +252,21 @@ void* handle_connection(void *arg)
     uint32_t command = ntohl(header.command);    // Convert command field to host byte order      
     uint32_t length  = ntohl(header.length);     // Convert length field to host byte order 
 
-    printf("[DEBUG] Header Read -> Cmd: %u, Len: %u\n", command, length);
 
     // Dispatch based on command type
-    if (command == COMMAND_REGISTER)
-        handle_registration(connfd, &header);    // Handle REGISTER command  
-
-    else if (command == COMMAND_INFORM)
-        handle_inform(&header, connfd);          // Handle INFORM command     
-
-    else if (command == COMMAND_RETREIVE)        // Handle RETRIEVE command
-        handle_retrieve(connfd, &header);
-    else {
-        printf("[DEBUG] Unknown command received: %u\n", command);
+    if (command == COMMAND_REGISTER){       
+         handle_registration(connfd, &header);    // Handle REGISTER command  
     }
 
+    else if (command == COMMAND_INFORM){
+        handle_inform(&header, connfd); 
+             }         // Handle INFORM command     
+
+    else if (command == COMMAND_RETREIVE)   {     // Handle RETRIEVE command
+        handle_retrieve(connfd, &header);
     close(connfd);                               // Close this client connection when done
     return NULL;
+    }
 }
 
 // Check if a peer (ip, port) exists in the current network array
