@@ -29,14 +29,14 @@ NetworkAddress_t get_random_peer();  // Get a random peer from the network
 // Function declarations
 void *handle_connection(void *arg);                                                    // Handle incoming connections (per client socket)
 void handle_registration(int connfd, RequestHeader_t *header);                         // Handle REGISTER command from a peer
-void handle_inform(RequestHeader_t *header, int connfd);                               // Handle INFORM command (peer update)
-void handle_retrieve(int connfd, RequestHeader_t *header);                             // Handle RETRIEVE command (file request)
+void handle_inform(RequestHeader_t *header, int connfd);                               // Handle INFORM command 
+void handle_retrieve(int connfd, RequestHeader_t *header);                             // Handle RETRIEVE command
 
-int peer_exists(char *ip, uint32_t port);                                              // Check if a peer (ip, port) is already in the network
+int peer_exists(char *ip, uint32_t port);                                              // Check if a peer is already in the network
 void compute_saved_signature(hashdata_t incoming, char *salt, hashdata_t out);         // Compute saved signature from hash + salt
 
 void send_inform(NetworkAddress_t *target, NetworkAddress_t *new_peer);                // Send INFORM command to a peer about a new peer
-void send_message(NetworkAddress_t peer_address, int command, char *req, int req_len); // Send a request to a peer (REGISTER/RETRIEVE, etc.)
+void send_message(NetworkAddress_t peer_address, int command, char *req, int req_len); // Send a request to a peer
 
 void update_network_from_payload(const uint8_t *payload, uint32_t len);                // Update local network state from a payload of peers
 int receive_reply(int fd, ReplyHeader_t *header_out, uint8_t **body_out);              // Receive reply from a peer on a socket
@@ -50,15 +50,15 @@ void* client_thread()
     // Registration: ask user which peer to initially connect to for REGISTER
     char peer_ip[IP_LEN];                               // Buffer for peer IP input
     fprintf(stdout, "Enter peer IP to connect to: ");   // Prompt for peer IP
-    scanf("%15s", peer_ip);                             // Read peer IP input (up to 15 chars + '\0')
+    scanf("%15s", peer_ip);                             // Read peer IP input
 
     // Pad the IP buffer with '\0' to ensure it's fully null-terminated
     for (int i = strlen(peer_ip); i < IP_LEN; i++)
         peer_ip[i] = '\0';                              // Null-terminate the IP string fully
 
-    char peer_port[PORT_STR_LEN];                       // Buffer for peer port input (as string)
+    char peer_port[PORT_STR_LEN];                       // Buffer for peer port input
     fprintf(stdout, "Enter peer port to connect to: "); // Prompt for peer port
-    scanf("%7s", peer_port);                            // Read peer port input (up to 7 chars + '\0')
+    scanf("%7s", peer_port);                            // Read peer port input 
 
     // Pad the port buffer with '\0' to ensure it's fully null-terminated
     for (int i = strlen(peer_port); i < PORT_STR_LEN; i++) 
@@ -83,7 +83,7 @@ void* client_thread()
         if (buffer[0] == 'r') {                       // User chose to retrieve a file
             char filename[PATH_LEN];                  // Buffer for requested filename
             printf("Enter filename to fetch: ");
-            scanf("%127s", filename);                 // Read filename (limit to PATH_LEN-1)
+            scanf("%127s", filename);                 // Read filename
 
             // Get random peer (other than ourselves) to request the file from
             NetworkAddress_t target = get_random_peer();
@@ -104,7 +104,7 @@ void* client_thread()
 }
 
 
-// Server thread function (accepts incoming connections and dispatches handlers)
+// Server thread function
 void* server_thread()
 {
     char port_str[PORT_STR_LEN];                                // Buffer for port string             
@@ -195,24 +195,19 @@ void handle_retrieve(int connfd, RequestHeader_t *header) {
         memcpy(reply.total_hash, total_hash, SHA256_HASH_SIZE);
         get_data_sha((char*)buffer, reply.block_hash, payload_len, SHA256_HASH_SIZE);
 
-        // --- SINGLE SHOT SENDING LOGIC ---
         
-        // 1. Copy Header to start of packet
+        // Copy Header to start of packet
         memcpy(packet_buffer, &reply, sizeof(ReplyHeader_t));
         
-        // 2. Copy Body to directly after Header
+        // Copy Body to directly after Header
         memcpy(packet_buffer + sizeof(ReplyHeader_t), buffer, payload_len);
         
-        // 3. Calculate total size of this specific packet
+        // Calculate total size of this specific packet
         size_t packet_len = sizeof(ReplyHeader_t) + payload_len;
 
-        // 4. Send it all at once
+        // Send it all at once
         compsys_helper_writen(connfd, packet_buffer, packet_len);
         
-        // ---------------------------------
-
-        // 1ms sleep. Slows transfer down to ~80KB/s, but guarantees stability.
-        //usleep(1000); 
     }
 
     free(packet_buffer);
@@ -223,31 +218,29 @@ void handle_retrieve(int connfd, RequestHeader_t *header) {
 
 // Pick a random peer from the network
 NetworkAddress_t get_random_peer() {
-    NetworkAddress_t target_peer;                             // Peer that will be returned
-    memset(&target_peer, 0, sizeof(NetworkAddress_t));        // Initialize to zeros (port=0 means "none")
+    NetworkAddress_t target_peer;                           
+    memset(&target_peer, 0, sizeof(NetworkAddress_t));        
 
     pthread_mutex_lock(&network_mutex);                       // Lock network while reading
-    // If I am the only one (count == 1), there is no one else to fetch from.
     if (peer_count > 1) {
         // Pick index between 0 and peer_count-1, but avoid my own entry
         int idx = rand() % peer_count;
         while (network[idx]->port == my_address->port) {      // Ensure we do not pick ourselves
             idx = rand() % peer_count;
         }
-        // Copy the data out so we can unlock the mutex safely
-        // We copy by value so realloc doesn't break us later
+
         memcpy(&target_peer, network[idx], sizeof(NetworkAddress_t));
     }
     pthread_mutex_unlock(&network_mutex);                     // Unlock network
 
 
-    return target_peer;                                       // Return chosen peer (or zeroed struct)
+    return target_peer;                                       // Return chosen peer 
 }
 
 // Handle incoming connection: read request header and dispatch to correct handler
 void* handle_connection(void *arg)
 {
-    int connfd = (intptr_t)arg;                  // Connection file descriptor passed as (void*)      
+    int connfd = (intptr_t)arg;                       
     RequestHeader_t header;                      // Request header structure        
     printf("[DEBUG] Accepted new connection (fd: %d)\n", connfd); 
 
@@ -259,7 +252,7 @@ void* handle_connection(void *arg)
     }
 
     uint32_t command = ntohl(header.command);    // Convert command field to host byte order      
-    uint32_t length  = ntohl(header.length);     // Convert length field to host byte order (unused directly)
+    uint32_t length  = ntohl(header.length);     // Convert length field to host byte order 
 
     printf("[DEBUG] Header Read -> Cmd: %u, Len: %u\n", command, length);
 
@@ -326,7 +319,7 @@ void send_inform(NetworkAddress_t *target, NetworkAddress_t *new_peer)
     memset(&header, 0, sizeof(header));                         // Initialize header to zero
 
     memcpy(header.ip, my_address->ip, IP_LEN);                  // Set sender IP (this peer)
-    header.port = htonl(my_address->port);                      // Set sender port (network order)
+    header.port = htonl(my_address->port);                      // Set sender port
     memcpy(header.signature, my_address->signature, SHA256_HASH_SIZE); // Set sender signature
     header.command = htonl(COMMAND_INFORM);                     // Set command to INFORM
     header.length = htonl(PEER_ADDR_LEN);                       // Payload will be one peer description
@@ -434,7 +427,7 @@ void handle_registration(int connfd, RequestHeader_t *header)
     }
 
     char *ip = header->ip;                          // Extract IP from header
-    uint32_t port = ntohl(header->port);            // Extract port from header (convert from network order)
+    uint32_t port = ntohl(header->port);            // Extract port from header
  
     // If peer already exists, send a special status and return
     if (peer_exists(ip, port)) {
@@ -506,7 +499,7 @@ void handle_registration(int connfd, RequestHeader_t *header)
     reply.block_count = htonl(1);                            // Block count = 1
 
     // Compute hash over payload and fill in header
-    get_data_sha((char *)payload, reply.block_hash, payload_len, SHA256_HASH_SIZE); // block_hash = H(payload)
+    get_data_sha((char *)payload, reply.block_hash, payload_len, SHA256_HASH_SIZE); // block_hash = H
     memcpy(reply.total_hash, reply.block_hash, SHA256_HASH_SIZE);                   // total_hash = block_hash     
 
     // Send reply header + payload (full peer list)
@@ -583,7 +576,7 @@ void send_message(NetworkAddress_t peer_address, int command,
             return;
         }
 
-        // We have the first block already (in reply/reply_body)
+        // We have the first block already
         // We need to loop until we have all blocks.
         
         uint32_t total_blocks = reply.block_count; // How many to expect
@@ -737,7 +730,7 @@ int main(int argc, char **argv)
     // Ask user for a password used to derive own signature
     char password[PASSWORD_LEN];                              // Buffer for password
     printf("Create a password to proceed: ");
-    scanf("%15s", password);                                  // Read password (max 15 chars)
+    scanf("%15s", password);                                  // Read password
 
     // Pad rest of password buffer with '\0'
     for (int i = strlen(password); i < PASSWORD_LEN; i++)
@@ -762,8 +755,8 @@ int main(int argc, char **argv)
     pthread_create(&client_thread_id, NULL, client_thread, NULL); // Create interactive client thread
     pthread_create(&server_thread_id, NULL, server_thread, NULL); // Create server thread for incoming connections
 
-    pthread_detach(client_thread_id);                         // Detach client thread (we don't join it)
-    pthread_join(server_thread_id, NULL);                     // Block until server thread finishes (effectively never) 
+    pthread_detach(client_thread_id);                         // Detach client thread
+    pthread_join(server_thread_id, NULL);                     // Block until server thread finishes
 
-    return 0;                                                 // Program end (unreached in normal usage)
+    return 0;                                              
 }
