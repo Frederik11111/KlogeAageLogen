@@ -3,14 +3,6 @@
 #include <stdio.h>
 #include <string.h>
 
-// Macros for extraction
-#define OPCODE(inst)   (inst & 0x7F) // Mask anyting but the last 7 bits
-#define RD(inst)       ((inst >> 7) & 0x1F) // Shift the first 7, and then mask intill last 5 bits
-#define FUNCT3(inst)   ((inst >> 12) & 0x7)
-#define RS1(inst)      ((inst >> 15) & 0x1F)
-#define RS2(inst)      ((inst >> 20) & 0x1F)
-#define FUNCT7(inst)   ((inst >> 25) & 0x7F)
-
 // Array to map register numbers (0-31) to names ("zero", "ra", "sp", etc.)
 const char* reg_names[32] = {
     "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2",
@@ -28,41 +20,74 @@ void disassemble(uint32_t addr, uint32_t instruction, char* result, size_t buf_s
     uint32_t funct7 = FUNCT7(instruction);
 
     switch (opcode) {
-        case 0x33: // R-Type (ADD, SUB, MUL, etc.)
-            // TODO: Nested switch on funct3 and funct7 to find exact instruction
-            // Example: if funct3 == 0x0 && funct7 == 0x00 -> "add"
-            break;
-
-        case 0x13: // I-Type Arithmetic (ADDI, etc.)
-            break;
-        
-        case 0x03: // Loads (LB, LW, etc.)
-            break;
-
-        case 0x23: // Stores (SB, SW, etc.)
-            break;
-
-        case 0x63: // Branches (BEQ, BNE, etc.)
-            break;
-
-        case 0x37: // LUI
-            break;
-            
-        case 0x17: // AUIPC
-            break;
-            
-        case 0x6F: // JAL
-            break;
-            
-        case 0x67: // JALR
-            break;
-            
-        case 0x73: // ECALL
-            snprintf(result, buf_size, "ecall");
-            break;
-
-        default:
-            snprintf(result, buf_size, "unknown");
-            break;
-    }
+        case 0x33: // R-Type
+            // Distinguish based on funct3 first
+            switch (funct3) {
+                case 0x0: 
+                    if (funct7 == 0x00) { // ADD
+                        sprintf(result, "add %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    } else if (funct7 == 0x20) { // SUB
+                        sprintf(result, "sub %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    } else if (funct7 == 0x01) { // MUL
+                        sprintf(result, "mul %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    }
+                    break;
+                case 0x1:
+                    if (funct7 == 0x00) { // SLL
+                        sprintf(result, "sll %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    } else if (funct7 == 0x01) { // MULH
+                        sprintf(result, "mulh %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    }
+                    break;
+                case 0x2:
+                    if (funct7 == 0x00) { // SLT
+                        sprintf(result, "slt %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    } else if (funct7 == 0x01) { // MULHSU
+                        sprintf(result, "mulhsu %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    }
+                    break;
+                case 0x3:
+                    if (funct7 == 0x00) { // SLTU
+                        sprintf(result, "sltu %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    } else if (funct7 == 0x01) { // MULHU
+                        sprintf(result, "mulhu %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    }
+                    break;
+                case 0x4:
+                    if (funct7 == 0x00) { // XOR
+                        sprintf(result, "xor %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    } else if (funct7 == 0x01) { // DIV
+                        sprintf(result, "div %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    }
+                    break;
+                case 0x5: 
+                    if (funct7 == 0x00) { // SRL
+                        sprintf(result, "srl %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    } else if (funct7 == 0x20) { // SRA
+                        sprintf(result, "sra %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    } else if (funct7 == 0x01) { // DIVU
+                        sprintf(result, "divu %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    }
+                    break;
+                case 0x6:
+                    if (funct7 == 0x00) { // OR
+                        sprintf(result, "or %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    } else if (funct7 == 0x01) { // REM
+                        sprintf(result, "rem %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    }
+                    break;
+                case 0x7:
+                    if (funct7 == 0x00) { // AND
+                        sprintf(result, "and %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    } else if (funct7 == 0x01) { // REMU
+                        sprintf(result, "remu %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                    }
+                    break;
+                }
+        case 0x13: // I-Type
+            switch (funct3){
+                case 0x0:{ // ADDI
+                    sprintf(result, "and %s, %s, %s", reg_names[rd], reg_names[rs1], reg_names[rs2]);
+                }
+            }
 }
