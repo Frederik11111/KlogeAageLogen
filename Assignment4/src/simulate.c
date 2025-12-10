@@ -6,354 +6,400 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <string.h> // Required for memset
+#include <string.h>
+#include <ctype.h>
 
-// ==========================================
-//    BRANCH PREDICTION LOGIC (From Main)
-// ==========================================
+//    BRANCH PREDICTION DATA STRUCTURES
 
-#define MAX_BPT_SIZE (16 * 1024)
+#define NUM_SIZES 4
+const int BP_SIZES[NUM_SIZES] = {256, 1024, 4096, 16384};
 
-// Branch history register for gshare
-uint32_t gshare_bhr = 0;
-
-// Tables for 2-bit saturating counters (0-3)
-uint8_t bimodal_bpt[MAX_BPT_SIZE]; 
-uint8_t gshare_bpt[MAX_BPT_SIZE];
-
-// Structure to track stats for each predictor:
 typedef struct {
-    long long total_predictions;
+    long long predictions;
     long long mispredictions;
-} PredictorStats;
+} BPStats;
 
-// Array of stats to log results easily
-PredictorStats predictor_results[4];    
+uint8_t bimodal_table[4][16384]; 
+uint8_t gshare_table[4][16384];
+uint32_t global_history = 0;
 
-// Enum for easy identification of the 4 predictors
-typedef enum {
-    P_NT = 0,       // Always Not Taken
-    P_BTFNT = 1,    // Backwards Taken, Forwards Not Taken
-    P_BIMODAL = 2,  // Bimodal Predictor
-    P_GSHARE = 3,   // Gshare Predictor
-} PredictorType;
+BPStats stats_nt;
+BPStats stats_btfnt;
+BPStats stats_bimodal[NUM_SIZES];
+BPStats stats_gshare[NUM_SIZES];
 
-// Size of Bimodal/gshare predictor tables to use in simulation
-int active_bimodal_size = 256;
-int active_gshare_size = 256;
-
-// Function to initialize predictor tables
-void init_predictors() {
-    for (int i = 0; i < 4; i++){
-        predictor_results[i].total_predictions = 0;
-        predictor_results[i].mispredictions = 0;
-    }
-    // Initialize Bimodal and Gshare BPTs to "weakly not taken" (value 1)
-    memset(bimodal_bpt, 1, MAX_BPT_SIZE);
-    memset(gshare_bpt, 1, MAX_BPT_SIZE);
-    gshare_bhr = 0;
-}
-
-// Helper function to update a 2-bit counter
-static void update_2bit_counter(uint8_t *counter, int actual_taken) {
-    if (actual_taken) {
-        if (*counter < 3) {
-            (*counter)++;
-        }
+uint8_t update_2bit_counter(uint8_t counter, int taken) {
+    if (taken) {
+        if (counter < 3) return counter + 1;
     } else {
-        if (*counter > 0) {
-            (*counter)--;
-        }
+        if (counter > 0) return counter - 1;
     }
+    return counter;
 }
 
-// Handle prediction, count errors, and update state for all 4 predictors
-void process_branch_prediction(uint32_t pc, int32_t branch_offset, int actual_taken) {
-
-    // 1. For NT and BTFNT
-    // [0] NT (Always not taken)
-    int nt_predicted = 0;
-
-    // [1] BFTNT (Backwards taken, forwards not taken)
-    int btfnt_predicted = (branch_offset < 0);
-
-    // 2. For Bimodal and Gshare (Dynamic)
-    // Bimodal prediction
-    uint32_t bimodal_index = (pc >> 2) & (active_bimodal_size - 1);
-
-    // Gshare prediction
-    uint32_t gshare_index = ((pc >> 2) ^ (gshare_bhr)) & (active_gshare_size - 1);
-
-    // [2] Bimodal - if counter >= 2, predict taken
-    int bimodal_predicted = (bimodal_bpt[bimodal_index] >= 2);
-
-    // [3] Gshare - if counter >=2, predict taken
-    int gshare_predicted = (gshare_bpt[gshare_index] >= 2);
-
-    // 3. Count errors and update stats:
-    int predictions[4] = {nt_predicted, btfnt_predicted, bimodal_predicted, gshare_predicted};
-    for (int i = 0; i < 4; i++) {
-        predictor_results[i].total_predictions++;
-        if (predictions[i] != actual_taken) {
-            predictor_results[i].mispredictions++;
-        }
-    }
-
-    // 4. Update state for Bimodal and Gshare predictors
-
-    // Update Bimodal BPT
-    update_2bit_counter(&bimodal_bpt[bimodal_index], actual_taken);
-
-    // Update Gshare BPT
-    update_2bit_counter(&gshare_bpt[gshare_index], actual_taken);
-
-    // Update Gshare BHR
-    gshare_bhr = ((gshare_bhr << 1) | (actual_taken ? 1 : 0)) & (active_gshare_size - 1); 
-    gshare_bhr &= (active_gshare_size - 1); 
+int predict_2bit(uint8_t counter) {
+    return (counter >= 2);
 }
 
-// ==========================================
-//          SIMULATION LOOP (From Marcus)
-// ==========================================
+void init_predictors() {
+    memset(&stats_nt, 0, sizeof(BPStats));
+    memset(&stats_btfnt, 0, sizeof(BPStats));
+    memset(stats_bimodal, 0, sizeof(BPStats) * NUM_SIZES);
+    memset(stats_gshare, 0, sizeof(BPStats) * NUM_SIZES);
+    global_history = 0;
+    memset(bimodal_table, 1, sizeof(bimodal_table));
+    memset(gshare_table, 1, sizeof(gshare_table));
+}
 
-// Macros handle sign extension for immediate values
-#define SIGN_EXTEND_12(x) ((((int32_t)(x)) << 20) >> 20)
-#define SIGN_EXTEND_20(x) ((((int32_t)(x)) << 12) >> 12)
+void update_branch_stats(unsigned int pc, int taken, int offset) {
+    stats_nt.predictions++;
+    if (taken) stats_nt.mispredictions++;
 
-struct Stat simulate(struct memory *mem, int start_addr, FILE *log_file, struct symbols* symbols) {
+    stats_btfnt.predictions++;
+    int prediction_btfnt = (offset < 0);
+    if (prediction_btfnt != taken) stats_btfnt.mispredictions++;
+
+    for (int i = 0; i < NUM_SIZES; i++) {
+        int size = BP_SIZES[i];
+        int mask = size - 1;
+
+        // Bimodal
+        int bim_idx = (pc >> 2) & mask;
+        int bim_pred = predict_2bit(bimodal_table[i][bim_idx]);
+        stats_bimodal[i].predictions++;
+        if (bim_pred != taken) stats_bimodal[i].mispredictions++;
+        bimodal_table[i][bim_idx] = update_2bit_counter(bimodal_table[i][bim_idx], taken);
+
+        // gShare
+        int gs_idx = ((pc >> 2) ^ global_history) & mask;
+        int gs_pred = predict_2bit(gshare_table[i][gs_idx]);
+        stats_gshare[i].predictions++;
+        if (gs_pred != taken) stats_gshare[i].mispredictions++;
+        gshare_table[i][gs_idx] = update_2bit_counter(gshare_table[i][gs_idx], taken);
+    }
+    global_history = (global_history << 1) | (taken & 1);
+}
+
+//    FILE I/O SUPPORT
+
+FILE* open_files[16] = {NULL}; // Simple file table
+
+// Helper function to read null-terminated string from memory
+void mem_read_str(struct memory* mem, int addr, char* buf, int max) {
+    int i = 0;
+    while (i < max - 1) {
+        char c = (char)memory_rd_b(mem, addr + i);
+        buf[i] = c;
+        if (c == 0) break;
+        i++;
+    }
+    buf[i] = 0;
+}
+
+//    SIMULATOR LOGIC
+
+int regs[32]; 
+
+int read_reg(int r) {
+    if (r == 0) return 0;
+    return regs[r];
+}
+
+// write to register file with logging
+void write_reg(int r, int val, FILE* log) {
+    if (r == 0) return;
+    regs[r] = val;
+    if (log) fprintf(log, " R[%d] <- %x", r, val);
+}
+
+struct Stat simulate(struct memory* mem, int start_addr, FILE* log_file, struct symbols* symbols) {
     struct Stat stats = {0};
-    
-    // Initialize predictors before starting simulation
-    init_predictors();
-
-    // RISC-V has 32 registers (x0-x31). x0 is hardwired to 0.
-    int32_t regs[32] = {0}; 
-    uint32_t pc = start_addr;
-    int32_t next_pc;
+    unsigned int pc = start_addr;
     int running = 1;
+    
+    for (int i = 0; i < 32; i++) regs[i] = 0;
+    init_predictors();
+    
+    // Setup stdio i fil-tabel
+    open_files[0] = stdin;
+    open_files[1] = stdout;
+    open_files[2] = stderr;
 
-    // registers x0 starts as 0
-    regs[0] = 0;
+    char dis_buffer[128];
 
+    // Exeqution loop
     while (running) {
-        // Fetch from memory
-        uint32_t inst = memory_rd_w(mem, pc);
+        unsigned int instruction = memory_rd_w(mem, pc);
+        unsigned int next_pc = pc + 4;
+
+        unsigned int opcode = OPCODE(instruction);
+        unsigned int rd = RD(instruction);
+        unsigned int rs1 = RS1(instruction);
+        unsigned int rs2 = RS2(instruction);
+        unsigned int funct3 = FUNCT3(instruction);
+        unsigned int funct7 = FUNCT7(instruction);
+        
+        int32_t imm_i = IMM_I(instruction);
+        int32_t imm_s = IMM_S(instruction);
+        int32_t imm_b = IMM_B(instruction);
+        int32_t imm_u = IMM_U(instruction);
+        int32_t imm_j = IMM_J(instruction);
 
         if (log_file) {
-            char buf[128];
-            // use disassemble
-            disassemble(pc, inst, buf, sizeof(buf), symbols);
-            fprintf(log_file, "%8x : %08x        %s\n", pc, inst, buf);
+            disassemble(pc, instruction, dis_buffer, 128, symbols);
+            fprintf(log_file, "%6ld => %8x : %08x %-30s", stats.insns + 1, pc, instruction, dis_buffer);
         }
 
-        // Decode
-        // use macros from extractor.h
-        uint32_t opcode = GET_OPCODE(inst);
-        uint32_t rd     = GET_RD(inst);
-        uint32_t rs1    = GET_RS1(inst);
-        uint32_t rs2    = GET_RS2(inst);
-        uint32_t funct3 = GET_FUNCT3(inst);
-        uint32_t funct7 = GET_FUNCT7(inst);
+        int taken_branch = 0;
+        int is_branch = 0;
 
-        // unpack
-        int32_t imm_i = SIGN_EXTEND_12(inst >> 20);
-        int32_t imm_s = SIGN_EXTEND_12(((inst >> 25) << 5) | ((inst >> 7) & 0x1F));
-        
-        // B-type
-        int32_t imm_b = SIGN_EXTEND_12(
-            ((inst & 0x80000000) >> 19) | 
-            ((inst & 0x80) << 4) | 
-            ((inst >> 20) & 0x7E0) | 
-            ((inst >> 7) & 0x1E)
-        );
-        
-        // U-type
-        int32_t imm_u = inst & 0xFFFFF000;
-        
-        // J-type
-        int32_t imm_j = SIGN_EXTEND_20(
-            ((inst & 0x80000000) >> 11) | 
-            (inst & 0xFF000) | 
-            ((inst >> 9) & 0x800) | 
-            ((inst >> 20) & 0x7FE0)
-        );
-
-        // Next instruction by default
-        next_pc = pc + 4;
-
-        // Execute
+        // Instruction execution
         switch (opcode) {
-            case 0x37: // LUI (Load Upper Immediate)
-                if (rd != 0) regs[rd] = imm_u;
-                break;
-            
-            case 0x17: // AUIPC (Add Upper Immediate to PC)
-                if (rd != 0) regs[rd] = pc + imm_u;
-                break;
-            
-            case 0x6F: // JAL (Jump and Link)
-                if (rd != 0) regs[rd] = pc + 4; // save return address
-                next_pc = pc + imm_j;           // Jump
-                break;
-            
-            case 0x67: // JALR (Jump and Link Register)
+            case 0x33: // R-Type
                 {
-                    int32_t target = (regs[rs1] + imm_i) & ~1;
-                    if (rd != 0) regs[rd] = pc + 4;
+                    int val1 = read_reg(rs1);
+                    int val2 = read_reg(rs2);
+                    int res = 0;
+                    if (funct7 == 0x01) { // RV32M
+                        switch (funct3) {
+                            case 0: res = val1 * val2; break;
+                            case 1: res = (int)((long long)val1 * (long long)val2 >> 32); break;
+                            case 2: res = (int)((long long)val1 * (unsigned int)val2 >> 32); break;
+                            case 3: res = (int)((unsigned long long)(unsigned int)val1 * (unsigned int)val2 >> 32); break;
+                            case 4: res = (val2 == 0) ? -1 : (val1 == -2147483648 && val2 == -1) ? -2147483648 : val1 / val2; break;
+                            case 5: res = (val2 == 0) ? -1 : (unsigned int)val1 / (unsigned int)val2; break;
+                            case 6: res = (val2 == 0) ? val1 : (val1 == -2147483648 && val2 == -1) ? 0 : val1 % val2; break;
+                            case 7: res = (val2 == 0) ? val1 : (unsigned int)val1 % (unsigned int)val2; break;
+                        }
+                    } else { // RV32I
+                        switch (funct3) {
+                            case 0: res = (funct7 == 0x20) ? (val1 - val2) : (val1 + val2); break;
+                            case 1: res = val1 << (val2 & 0x1F); break;
+                            case 2: res = (val1 < val2) ? 1 : 0; break;
+                            case 3: res = ((unsigned int)val1 < (unsigned int)val2) ? 1 : 0; break;
+                            case 4: res = val1 ^ val2; break;
+                            case 5: res = (funct7 == 0x20) ? (val1 >> (val2 & 0x1F)) : ((unsigned int)val1 >> (val2 & 0x1F)); break;
+                            case 6: res = val1 | val2; break;
+                            case 7: res = val1 & val2; break;
+                        }
+                    }
+                    write_reg(rd, res, log_file);
+                }
+                break;
+            case 0x13: // I-Type
+                {
+                    int val1 = read_reg(rs1);
+                    int res = 0;
+                    switch (funct3) {
+                        case 0: res = val1 + imm_i; break;
+                        case 1: res = val1 << (imm_i & 0x1F); break;
+                        case 2: res = (val1 < imm_i) ? 1 : 0; break;
+                        case 3: res = ((unsigned int)val1 < (unsigned int)imm_i) ? 1 : 0; break;
+                        case 4: res = val1 ^ imm_i; break;
+                        case 5: 
+                            if ((imm_i >> 5) & 0x20) res = val1 >> (imm_i & 0x1F);
+                            else res = (unsigned int)val1 >> (imm_i & 0x1F);
+                            break;
+                        case 6: res = val1 | imm_i; break;
+                        case 7: res = val1 & imm_i; break;
+                    }
+                    write_reg(rd, res, log_file);
+                }
+                break;
+            case 0x03: // Loads
+                {
+                    int addr = read_reg(rs1) + imm_i;
+                    int val = 0;
+                    switch (funct3) {
+                        case 0: val = (int)(int8_t)memory_rd_b(mem, addr); break;
+                        case 1: val = (int)(int16_t)memory_rd_h(mem, addr); break;
+                        case 2: val = memory_rd_w(mem, addr); break;
+                        case 4: val = memory_rd_b(mem, addr); break;
+                        case 5: val = memory_rd_h(mem, addr); break;
+                    }
+                    write_reg(rd, val, log_file);
+                }
+                break;
+            case 0x23: // Stores
+                {
+                    int addr = read_reg(rs1) + imm_s;
+                    int val = read_reg(rs2);
+                    switch (funct3) {
+                        case 0: memory_wr_b(mem, addr, val); break;
+                        case 1: memory_wr_h(mem, addr, val); break;
+                        case 2: memory_wr_w(mem, addr, val); break;
+                    }
+                    if (log_file) fprintf(log_file, " Mem[%x] <- %x", addr, val);
+                }
+                break;
+            case 0x63: // Branches
+                {
+                    is_branch = 1;
+                    int val1 = read_reg(rs1);
+                    int val2 = read_reg(rs2);
+                    int cond = 0;
+                    switch (funct3) {
+                        case 0: cond = (val1 == val2); break;
+                        case 1: cond = (val1 != val2); break;
+                        case 4: cond = (val1 < val2); break;
+                        case 5: cond = (val1 >= val2); break;
+                        case 6: cond = ((unsigned int)val1 < (unsigned int)val2); break;
+                        case 7: cond = ((unsigned int)val1 >= (unsigned int)val2); break;
+                    }
+                    update_branch_stats(pc, cond, imm_b);
+                    if (cond) {
+                        next_pc = pc + imm_b;
+                        taken_branch = 1;
+                    }
+                }
+                break;
+            case 0x6F: // JAL
+                write_reg(rd, pc + 4, log_file);
+                next_pc = pc + imm_j;
+                break;
+            case 0x67: // JALR
+                {
+                    int target = (read_reg(rs1) + imm_i) & ~1;
+                    write_reg(rd, pc + 4, log_file);
                     next_pc = target;
                 }
                 break;
-            
-            case 0x63: // Branch
+            case 0x37: // LUI
+                write_reg(rd, imm_u, log_file);
+                break;
+            case 0x17: // AUIPC
+                write_reg(rd, pc + imm_u, log_file);
+                break;
+            case 0x73: // ECALL
                 {
-                    int take = 0;
-                    switch (funct3) {
-                        case 0x0: take = (regs[rs1] == regs[rs2]); break; // BEQ
-                        case 0x1: take = (regs[rs1] != regs[rs2]); break; // BNE
-                        case 0x4: take = (regs[rs1] < regs[rs2]); break;  // BLT
-                        case 0x5: take = (regs[rs1] >= regs[rs2]); break; // BGE
-                        case 0x6: take = ((uint32_t)regs[rs1] < (uint32_t)regs[rs2]); break; // BLTU
-                        case 0x7: take = ((uint32_t)regs[rs1] >= (uint32_t)regs[rs2]); break; // BGEU
-                    }
+                    int a7 = read_reg(17);
+                    int a0 = read_reg(10);
+                    int a1 = read_reg(11);
+                    int a2 = read_reg(12);
                     
-                    // --- INTEGRATED PREDICTOR ---
-                    // Log and update prediction statistics based on actual outcome (take)
-                    process_branch_prediction(pc, imm_b, take);
-                    // ----------------------------
-
-                    if (take) next_pc = pc + imm_b;
-                }
-                break;
-            
-            case 0x03: // LOAD (I-Type)
-                {
-                    int32_t addr = regs[rs1] + imm_i;
-                    int32_t val = 0;
-                    switch (funct3) {
-                        case 0x0: val = (int8_t)memory_rd_b(mem, addr); break;  // LB
-                        case 0x1: val = (int16_t)memory_rd_h(mem, addr); break; // LH
-                        case 0x2: val = memory_rd_w(mem, addr); break;          // LW
-                        case 0x4: val = (uint8_t)memory_rd_b(mem, addr); break; // LBU
-                        case 0x5: val = (uint16_t)memory_rd_h(mem, addr); break;// LHU
-                    }
-                    if (rd != 0) regs[rd] = val;
-                }
-                break;
-            
-            case 0x23: // STORE (S-Type)
-                {
-                    int32_t addr = regs[rs1] + imm_s;
-                    switch (funct3) {
-                        case 0x0: memory_wr_b(mem, addr, regs[rs2]); break; // SB
-                        case 0x1: memory_wr_h(mem, addr, regs[rs2]); break; // SH
-                        case 0x2: memory_wr_w(mem, addr, regs[rs2]); break; // SW
-                    }
-                }
-                break;
-            
-            case 0x13: // ALUi (I-Type)
-                {
-                    int32_t val = 0;
-                    switch (funct3) {
-                        case 0x0: val = regs[rs1] + imm_i; break; // ADDI
-                        case 0x2: val = (regs[rs1] < imm_i) ? 1 : 0; break; // SLTI
-                        case 0x3: val = ((uint32_t)regs[rs1] < (uint32_t)imm_i) ? 1 : 0; break; // SLTIU
-                        case 0x4: val = regs[rs1] ^ imm_i; break; // XORI
-                        case 0x6: val = regs[rs1] | imm_i; break; // ORI
-                        case 0x7: val = regs[rs1] & imm_i; break; // ANDI
-                        case 0x1: val = regs[rs1] << (imm_i & 0x1F); break; // SLLI
-                        case 0x5: // SRLI og SRAI deler funct3
-                            if ((inst >> 30) & 1) 
-                                val = regs[rs1] >> (imm_i & 0x1F); // SRAI (arithmetic shift)
-                            else 
-                                val = (uint32_t)regs[rs1] >> (imm_i & 0x1F); // SRLI (logical shift)
-                            break;
-                    }
-                    if (rd != 0) regs[rd] = val;
-                }
-                break;
-            
-            case 0x33: // ALU (R-Type) - Regn med to registre
-                {
-                    int32_t val = 0;
-                    if (funct7 == 0x00) {
-                        // Standard operations
-                        switch (funct3) {
-                            case 0x0: val = regs[rs1] + regs[rs2]; break; // ADD
-                            case 0x1: val = regs[rs1] << (regs[rs2] & 0x1F); break; // SLL
-                            case 0x2: val = (regs[rs1] < regs[rs2]) ? 1 : 0; break; // SLT
-                            case 0x3: val = ((uint32_t)regs[rs1] < (uint32_t)regs[rs2]) ? 1 : 0; break; // SLTU
-                            case 0x4: val = regs[rs1] ^ regs[rs2]; break; // XOR
-                            case 0x5: val = (uint32_t)regs[rs1] >> (regs[rs2] & 0x1F); break; // SRL
-                            case 0x6: val = regs[rs1] | regs[rs2]; break; // OR
-                            case 0x7: val = regs[rs1] & regs[rs2]; break; // AND
-                        }
-                    } else if (funct7 == 0x20) {
-                        // Variants (SUB / SRA)
-                        switch (funct3) {
-                            case 0x0: val = regs[rs1] - regs[rs2]; break; // SUB
-                            case 0x5: val = regs[rs1] >> (regs[rs2] & 0x1F); break; // SRA
-                        }
-                    } else if (funct7 == 0x01) {
-                        // M Extension (Multiplikation og Division)
-                        switch (funct3) {
-                            case 0x0: val = regs[rs1] * regs[rs2]; break; // MUL
-                            
-                            case 0x4: // DIV
-                                if (regs[rs2] == 0) val = -1; 
-                                else val = regs[rs1] / regs[rs2]; 
-                                break;
-                            case 0x5: // DIVU
-                                if (regs[rs2] == 0) val = -1;
-                                else val = (uint32_t)regs[rs1] / (uint32_t)regs[rs2];
-                                break;
-                            case 0x6: // REM
-                                if (regs[rs2] == 0) val = regs[rs1];
-                                else val = regs[rs1] % regs[rs2];
-                                break;
-                            case 0x7: // REMU
-                                if (regs[rs2] == 0) val = regs[rs1];
-                                else val = (uint32_t)regs[rs1] % (uint32_t)regs[rs2];
-                                break;
-                        }
-                    }
-                    if (rd != 0) regs[rd] = val;
-                }
-                break;
-            
-            case 0x73: // Ecall
-                {
-                    int syscall_id = regs[17]; 
-                    
-                    switch (syscall_id) {
+                    switch (a7) {
                         case 1: // getchar
-                            regs[10] = getchar();
+                            {
+                                int c = getchar();
+                                write_reg(10, c, log_file);
+                            }
                             break;
                         case 2: // putchar
-                            putchar((char)regs[10]);
+                            putchar((char)a0);
                             break;
-                        case 3: // terminate
-                        case 93: // exit (standard linux)
+                        case 3: // exit
+                        case 93: // exit
                             running = 0;
                             break;
+                        case 4: // read_int_buffer(file, buffer, max_size)
+                            {
+                                if (a0 >= 0 && a0 < 16 && open_files[a0]) {
+                                    int count = 0;
+                                    int val;
+                                    // Læs heltal fra filen indtil max eller EOF
+                                    for (int k=0; k<a2; k++) {
+                                        if (fscanf(open_files[a0], "%d", &val) != 1) break;
+                                        memory_wr_w(mem, a1 + k*4, val);
+                                        count++;
+                                    }
+                                    write_reg(10, count, log_file); // Returværdi: antal læst
+                                } else {
+                                    write_reg(10, -1, log_file); // Fejl
+                                }
+                            }
+                            break;
+                        case 5: // write_int_buffer(file, buffer, size)
+                            {
+                                if (a0 >= 0 && a0 < 16 && open_files[a0]) {
+                                    int count = 0;
+                                    for (int k=0; k<a2; k++) {
+                                        int val = memory_rd_w(mem, a1 + k*4);
+                                        fprintf(open_files[a0], "%d ", val); // Radix forventer mellemrum
+                                        count++;
+                                    }
+                                    //
+                                    write_reg(10, count, log_file);
+                                } else {
+                                    write_reg(10, -1, log_file);
+                                }
+                            }
+                            break;
+                        case 6: // open_file / close_file
+                            
+                            if (a0 > 0x1000) { 
+                                // OPEN
+                                char path[256];
+                                char mode[16];
+                                mem_read_str(mem, a0, path, 256);
+                                mem_read_str(mem, a1, mode, 16);
+                                
+                                int slot = -1;
+                                for(int k=3; k<16; k++) { // Find ledig plads (skip 0-2)
+                                    if (open_files[k] == NULL) { slot = k; break; }
+                                }
+                                if (slot != -1) {
+                                    open_files[slot] = fopen(path, mode);
+                                    if (open_files[slot]) write_reg(10, slot, log_file);
+                                    else write_reg(10, -1, log_file);
+                                } else {
+                                    write_reg(10, -1, log_file);
+                                }
+                            } else {
+                                // CLOSE
+                                if (a0 >= 3 && a0 < 16 && open_files[a0]) {
+                                    fclose(open_files[a0]);
+                                    open_files[a0] = NULL;
+                                    write_reg(10, 0, log_file);
+                                } else {
+                                    write_reg(10, -1, log_file);
+                                }
+                            }
+                            break;
                         default:
+                            printf("\nUnknown syscall: %d\n", a7);
+                            running = 0;
                             break;
                     }
                 }
                 break;
-                
+            
             default:
-                // Illegal instruction - stop simulation
-                fprintf(stderr, "Unknown instruction at 0x%08x: 0x%08x\n", pc, inst);
-                running = 0;
                 break;
         }
-        
-        regs[0] = 0;
-        
-        // Update pc
+
+        if (log_file) {
+            if (is_branch && taken_branch) fprintf(log_file, " {T}");
+            fprintf(log_file, "\n");
+        }
+
         pc = next_pc;
         stats.insns++;
     }
+
+    // Close any remaining open files
+    for(int k=3; k<16; k++) {
+        if(open_files[k]) fclose(open_files[k]);
+    }
+
+    printf("\n--- Branch Predictor Results ---\n");
+    printf("Total Branches: %lld\n", stats_nt.predictions);
+    
+    printf("\n[NT] Always Not Taken:\n");
+    printf("  Mispredictions: %lld\n", stats_nt.mispredictions);
+    
+    printf("\n[BTFNT] Backwards Taken, Forward Not Taken:\n");
+    printf("  Mispredictions: %lld\n", stats_btfnt.mispredictions);
+
+    printf("\n[Bimodal] Predictor:\n");
+    for (int i = 0; i < NUM_SIZES; i++) {
+        printf("  Size %5d: Mispredictions: %lld\n", BP_SIZES[i], stats_bimodal[i].mispredictions);
+    }
+
+    printf("\n[gShare] Predictor:\n");
+    for (int i = 0; i < NUM_SIZES; i++) {
+        printf("  Size %5d: Mispredictions: %lld\n", BP_SIZES[i], stats_gshare[i].mispredictions);
+    }
+    printf("--------------------------------\n");
+
     return stats;
 }
