@@ -179,5 +179,12 @@ void disassemble(uint32_t addr, uint32_t instruction, char* result, size_t buf_s
             case 0x67: // I-Type    
                 sprintf(result, "jalr %s, %d(%s)", reg_names[rd], imm, reg_names[rs1]);
                 break;
-    }
+            case 0x73: // System
+                if (funct3 == 0x0 && imm == 0) { // Standard ecall check
+                    sprintf(result, "ecall");
+                } else {
+                    sprintf(result, "system_unk"); // Fallback
+                }
+                break;
+        }
 }
